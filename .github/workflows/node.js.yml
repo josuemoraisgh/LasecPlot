@@ -26,7 +26,6 @@ jobs:
 
     env:
       EXT_DIR: vscode
-      # Colocamos os segredos em variáveis de ambiente para poder checar no `if:`
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       VSCE_PAT: ${{ secrets.VSCE_PAT }}
       OPEN_VSX_TOKEN: ${{ secrets.OPEN_VSX_TOKEN }}
@@ -69,34 +68,33 @@ jobs:
           RAW="${{ inputs.version }}"
           RAW="${RAW//[[:space:]]/}"         # remove espaços
           SANITIZED="${RAW#[vV]}"            # tira prefixo v/V
+          PR_FLAG="${{ inputs.prerelease }}" # flag vinda do input
+          BASE="$SANITIZED"
 
-          # Converte 1.2.3-RC1 / rc01 -> 1.2.3-rc.1
+          # Detecta 1.2.3-RC5 / rc05 / Beta7 etc. -> separa base e liga pré-release
           if [[ "$SANITIZED" =~ ^([0-9]+\.[0-9]+\.[0-9]+)-([A-Za-z]+)([0-9]+)$ ]]; then
             BASE="${BASH_REMATCH[1]}"
-            PRE="${BASH_REMATCH[2],,}"
-            NUM="${BASH_REMATCH[3]}"
-            NUM=$((10#$NUM))
-            SANITIZED="${BASE}-${PRE}.${NUM}"
+            PR_FLAG=true
           fi
 
-          echo "SANITIZED_VERSION=$SANITIZED" >> "$GITHUB_ENV"
+          echo "SANITIZED_INPUT=$SANITIZED" >> "$GITHUB_ENV"
+          echo "BASE_VERSION=$BASE" >> "$GITHUB_ENV"
+          echo "IS_PRERELEASE=$PR_FLAG" >> "$GITHUB_ENV"
 
           CUR=$(node -p "require('./package.json').version || ''")
-          if [ "$CUR" != "$SANITIZED" ]; then
-            npm version "$SANITIZED" --no-git-tag-version
-          else
-            echo "package.json já está em $SANITIZED"
+          if [ "$CUR" != "$BASE" ]; then
+            npm version "$BASE" --no-git-tag-version
           fi
 
           NAME=$(node -e "console.log(require('./package.json').name)")
           PUB=$(node -e "console.log(require('./package.json').publisher)")
           if [ -z "${PUB:-}" ] || [ "$PUB" = "undefined" ]; then
-            echo "::warning::publisher ausente; necessário para publicar no Marketplace."
-            VSIX="lasecplot-${SANITIZED}.vsix"
-          else
-            VSIX="${PUB}.${NAME}-${SANITIZED}.vsix"
+            echo "::warning ::'publisher' ausente em package.json (necessário para publicar no Marketplace)."
+            PUB="publisher"
           fi
-          echo "VSIX_NAME=$VSIX" >> "$GITHUB_ENV"
+          echo "EXT_NAME=$NAME" >> "$GITHUB_ENV"
+          echo "PUBLISHER=$PUB" >> "$GITHUB_ENV"
+          echo "VSIX_NAME=${PUB}.${NAME}-${SANITIZED}.vsix" >> "$GITHUB_ENV"
 
       - name: Instalar dependências
         shell: bash
@@ -136,8 +134,7 @@ jobs:
         run: npm run -s build || echo "Sem script de build"
 
       - name: Instalar CLIs (vsce/ovsx)
-        run: |
-          npm i -g @vscode/vsce ovsx
+        run: npm i -g @vscode/vsce ovsx
 
       - name: Empacotar (.vsix)
         working-directory: ${{ env.EXT_DIR }}
@@ -164,17 +161,23 @@ jobs:
           VSCE_PAT: ${{ env.VSCE_PAT }}
         run: |
           set -euxo pipefail
-          if ${{ inputs.prerelease }}; then
-            vsce publish --pre-release --packagePath "../${{ env.VSIX_NAME }}"
+          if [ "${IS_PRERELEASE}" = "true" ]; then
+            vsce publish --pre-release --packagePath "../${VSIX_NAME}"
           else
-            vsce publish --packagePath "../${{ env.VSIX_NAME }}"
+            vsce publish --packagePath "../${VSIX_NAME}"
           fi
 
       - name: Publicar no Open VSX (opcional)
         if: ${{ env.OPEN_VSX_TOKEN != '' }}
+        env:
+          OPEN_VSX_TOKEN: ${{ env.OPEN_VSX_TOKEN }}
         run: |
           set -euxo pipefail
-          ovsx publish "${{ env.VSIX_NAME }}" -p "${{ env.OPEN_VSX_TOKEN }}"
+          if [ "${IS_PRERELEASE}" = "true" ]; then
+            ovsx publish "${VSIX_NAME}" -p "${OPEN_VSX_TOKEN}" --pre-release
+          else
+            ovsx publish "${VSIX_NAME}" -p "${OPEN_VSX_TOKEN}"
+          fi
 
       - name: Criar/empurrar tag
         shell: bash
@@ -196,7 +199,7 @@ jobs:
           tag_name: ${{ inputs.version }}
           name: LasecPlot VSCode ${{ inputs.version }}
           body: ${{ inputs.notes }}
-          prerelease: ${{ inputs.prerelease }}
+          prerelease: ${{ env.IS_PRERELEASE }}
           target_commitish: ${{ github.sha }}
           files: ${{ env.VSIX_NAME }}
         env:
