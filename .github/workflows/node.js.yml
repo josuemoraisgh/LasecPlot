@@ -64,12 +64,10 @@ jobs:
         run: |
           set -euxo pipefail
           RAW="${{ inputs.version }}"
-          # remove espaços
-          RAW="${RAW//[[:space:]]/}"
-          # remove prefixo v ou V
-          SANITIZED="${RAW#[vV]}"
+          RAW="${RAW//[[:space:]]/}"           # remove espaços
+          SANITIZED="${RAW#[vV]}"              # remove prefixo v/V
 
-          # Se vier algo como 0.0.1-RC1, converte para 0.0.1-rc.1 (semver)
+          # Converte 0.0.1-RC1 => 0.0.1-rc.1 (semver)
           if [[ "$SANITIZED" =~ ^([0-9]+\.[0-9]+\.[0-9]+)-([A-Za-z]+)([0-9]+)$ ]]; then
             BASE="${BASH_REMATCH[1]}"
             PRE="${BASH_REMATCH[2],,}"
@@ -79,32 +77,41 @@ jobs:
 
           echo "SANITIZED_VERSION=$SANITIZED" >> "$GITHUB_ENV"
 
-          # aplica no package.json; falha com mensagem clara se inválido
           if ! npm version "$SANITIZED" --no-git-tag-version; then
             echo "::error::Versão inválida para package.json: '$SANITIZED'. Use sem 'v/V' e em semver (ex.: 1.2.3, 1.2.3-rc.1)."
             exit 1
           fi
 
-          # Derivar nome do VSIX: <publisher>.<name>-<version>.vsix (padrão do vsce)
           NAME=$(node -e "console.log(require('./package.json').name)")
           PUB=$(node -e "console.log(require('./package.json').publisher)")
           if [ -z "${PUB:-}" ] || [ "$PUB" = "undefined" ]; then
-            echo "::warning::Campo 'publisher' ausente em ${PWD}/package.json. Defina-o para publicar no Marketplace."
+            echo "::warning::Campo 'publisher' ausente no package.json; necessário para publicar no Marketplace."
             VSIX="teleplot-${SANITIZED}.vsix"
           else
             VSIX="${PUB}.${NAME}-${SANITIZED}.vsix"
           fi
           echo "VSIX_NAME=$VSIX" >> "$GITHUB_ENV"
 
-          # Conferências úteis (opcional: falhar cedo se ausentes)
           ENG=$(node -e "console.log((require('./package.json').engines||{}).vscode||'')")
           if [ -z "$ENG" ] || [ "$ENG" = "undefined" ]; then
-            echo "::warning::'engines.vscode' não definido no package.json; defina um range suportado (ex.: ^1.84.0)."
+            echo "::warning::'engines.vscode' não definido; defina um range suportado (ex.: ^1.84.0)."
           fi
 
-      - name: Instalar dependências
+      - name: Instalar dependências (ci ou install)
+        shell: bash
         working-directory: ${{ env.EXT_DIR }}
-        run: npm ci
+        run: |
+          set -euxo pipefail
+          # evita prompts/telemetria/auditoria em CI
+          npm config set fund false
+          npm config set audit false
+          if [ -f package-lock.json ] || [ -f npm-shrinkwrap.json ]; then
+            echo "Lockfile detectado => npm ci"
+            npm ci
+          else
+            echo "Sem lockfile => npm install (gerando package-lock.json)"
+            npm install --no-audit --no-fund
+          fi
 
       - name: Build (se existir script)
         working-directory: ${{ env.EXT_DIR }}
@@ -160,11 +167,11 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # Publicação opcional (Marketplace VS Code / Open VSX):
+      # Publicação opcional:
       # - name: Publicar em VSCode Marketplace / Open VSX
       #   if: ${{ !cancelled() }}
       #   uses: HaaLeo/publish-vscode-extension@v2
       #   with:
-      #     pat: ${{ secrets.VSCE_PAT }}            # Token do Marketplace (vsce)
-      #     extensionFile: ${{ env.VSIX_NAME }}     # Reutiliza o .vsix gerado
-      #     ovsxToken: ${{ secrets.OPEN_VSX_TOKEN }}# (opcional) publicar no Open VSX
+      #     pat: ${{ secrets.VSCE_PAT }}
+      #     extensionFile: ${{ env.VSIX_NAME }}
+      #     ovsxToken: ${{ secrets.OPEN_VSX_TOKEN }}
