@@ -3,12 +3,12 @@
   "displayName": "Teleplot",
   "description": "Teleplot - Ridiculously-simple telemetry viewer.",
   "version": "1.2.0",
-  "publisher": "alexnesnes",
+  "publisher": "josuemoraisgh",
   "private": true,
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/nesnes/teleplot"
+    "url": "https://github.com/josuemoraisgh/teleplot"
   },
   "engines": {
     "vscode": "^1.47.0"
