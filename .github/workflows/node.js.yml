@@ -1,10 +1,10 @@
-name: VSCode Ext Build & Release (teleplot)
+name: VSCode Ext Build & Release (LasecPlot)
 
 on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Versão/Tag (ex.: v0.1.0 ou V0.1.0-RC1)"
+        description: "Versão/Tag (ex.: v1.2.3 ou V1.2.3-RC5)"
         required: true
         type: string
       prerelease:
@@ -36,7 +36,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: true
 
-      - name: Configurar Node.js (20.x)
+      - name: Node.js 20.x
         uses: actions/setup-node@v4
         with:
           node-version: "20"
@@ -45,36 +45,29 @@ jobs:
             ${{ env.EXT_DIR }}/package-lock.json
             ${{ env.EXT_DIR }}/package.json
 
-      - name: Instalar dependências de sistema (para addons nativos)
+      - name: Dependências nativas
         run: |
           sudo apt-get update -y
-          sudo apt-get install -y --no-install-recommends \
-            build-essential python3 make g++ \
-            libudev-dev
+          sudo apt-get install -y --no-install-recommends build-essential python3 make g++ libudev-dev jq
 
       - name: Verificações mínimas
         shell: bash
         run: |
           set -euxo pipefail
-          if [ ! -d "${{ env.EXT_DIR }}" ]; then
-            echo "::error::Diretório ${{ env.EXT_DIR }} não encontrado. Ajuste EXT_DIR ou crie a pasta da extensão."
-            exit 1
-          fi
-          if [ ! -f "${{ env.EXT_DIR }}/package.json" ]; then
-            echo "::error::package.json não encontrado em ${{ env.EXT_DIR }}."
-            exit 1
-          fi
+          test -d "${{ env.EXT_DIR }}"
+          test -f "${{ env.EXT_DIR }}/package.json"
 
-      - name: Normalizar versão e preparar package.json
+      - name: Normalizar versão e atualizar package.json
         id: ver
         shell: bash
         working-directory: ${{ env.EXT_DIR }}
         run: |
           set -euxo pipefail
           RAW="${{ inputs.version }}"
-          RAW="${RAW//[[:space:]]/}"          # remove espaços
-          SANITIZED="${RAW#[vV]}"             # remove prefixo v/V
-          # Converte 0.0.1-RC1/RC01 => 0.0.1-rc.1 (sem zeros à esquerda)
+          RAW="${RAW//[[:space:]]/}"         # remove espaços
+          SANITIZED="${RAW#[vV]}"            # tira prefixo v/V
+
+          # Converte 1.2.3-RC1 / rc01 -> 1.2.3-rc.1
           if [[ "$SANITIZED" =~ ^([0-9]+\.[0-9]+\.[0-9]+)-([A-Za-z]+)([0-9]+)$ ]]; then
             BASE="${BASH_REMATCH[1]}"
             PRE="${BASH_REMATCH[2],,}"
@@ -82,26 +75,27 @@ jobs:
             NUM=$((10#$NUM))
             SANITIZED="${BASE}-${PRE}.${NUM}"
           fi
+
           echo "SANITIZED_VERSION=$SANITIZED" >> "$GITHUB_ENV"
-          if ! npm version "$SANITIZED" --no-git-tag-version; then
-            echo "::error::Versão inválida para package.json: '$SANITIZED'. Use sem 'v/V' e em semver (ex.: 1.2.3, 1.2.3-rc.1)."
-            exit 1
+
+          CUR=$(node -p "require('./package.json').version || ''")
+          if [ "$CUR" != "$SANITIZED" ]; then
+            npm version "$SANITIZED" --no-git-tag-version
+          else
+            echo "package.json já está em $SANITIZED"
           fi
+
           NAME=$(node -e "console.log(require('./package.json').name)")
           PUB=$(node -e "console.log(require('./package.json').publisher)")
           if [ -z "${PUB:-}" ] || [ "$PUB" = "undefined" ]; then
-            echo "::warning::Campo 'publisher' ausente no package.json; necessário para publicar no Marketplace."
-            VSIX="teleplot-${SANITIZED}.vsix"
+            echo "::warning::publisher ausente; necessário para publicar no Marketplace."
+            VSIX="lasecplot-${SANITIZED}.vsix"
           else
             VSIX="${PUB}.${NAME}-${SANITIZED}.vsix"
           fi
           echo "VSIX_NAME=$VSIX" >> "$GITHUB_ENV"
-          ENG=$(node -e "console.log((require('./package.json').engines||{}).vscode||'')")
-          if [ -z "$ENG" ] || [ "$ENG" = "undefined" ]; then
-            echo "::warning::'engines.vscode' não definido; defina um range suportado (ex.: ^1.84.0)."
-          fi
 
-      - name: Instalar dependências (tenta omitir opcionais primeiro)
+      - name: Instalar dependências
         shell: bash
         working-directory: ${{ env.EXT_DIR }}
         run: |
@@ -109,56 +103,48 @@ jobs:
           npm config set fund false
           npm config set audit false
           if [ -f package-lock.json ] || [ -f npm-shrinkwrap.json ]; then
-            echo "Lockfile detectado."
-            if ! npm ci --omit=optional; then
-              echo "::warning::npm ci --omit=optional falhou; tentando npm ci padrão."
-              npm ci
-            fi
+            npm ci --omit=optional || npm ci
           else
-            echo "Sem lockfile."
-            if ! npm install --no-audit --no-fund --omit=optional; then
-              echo "::warning::npm install --omit=optional falhou; tentando npm install padrão."
-              npm install --no-audit --no-fund
-            fi
+            npm install --no-audit --no-fund --omit=optional || npm install --no-audit --no-fund
           fi
 
-      - name: Higienizar TypeScript/Node typings
+      - name: Ajustar tsconfig e typings
         shell: bash
         working-directory: ${{ env.EXT_DIR }}
         run: |
-          set -euxo pipefail
-          npm install -D @types/node@^20 --no-audit --no-fund
           node <<'NODE'
-          const fs = require('fs');
-          const p = 'tsconfig.json';
-          let j = {};
-          try { j = JSON.parse(fs.readFileSync(p, 'utf8')); } catch (_) {}
-          j.compilerOptions = j.compilerOptions || {};
-          j.compilerOptions.skipLibCheck = true;
-          j.compilerOptions.skipDefaultLibCheck = true;
-          if (!j.compilerOptions.target) j.compilerOptions.target = 'ES2020';
-          if (!j.compilerOptions.module) j.compilerOptions.module = 'commonjs';
-          if (!j.compilerOptions.moduleResolution) j.compilerOptions.moduleResolution = 'node';
-          if (j.compilerOptions.esModuleInterop === undefined) j.compilerOptions.esModuleInterop = true;
-          if (j.compilerOptions.forceConsistentCasingInFileNames === undefined) j.compilerOptions.forceConsistentCasingInFileNames = true;
-          const types = new Set([...(j.compilerOptions.types || []), 'node']);
-          j.compilerOptions.types = Array.from(types);
-          if (!j.include) j.include = ['src', 'out', 'typings'];
-          fs.writeFileSync(p, JSON.stringify(j, null, 2));
-          console.log('tsconfig.json atualizado');
+          const fs = require('fs'); const p='tsconfig.json';
+          let j={}; try{ j=JSON.parse(fs.readFileSync(p,'utf8')); }catch{}
+          j.compilerOptions=j.compilerOptions||{};
+          Object.assign(j.compilerOptions,{
+            target:'ES2020', module:'commonjs', moduleResolution:'node',
+            esModuleInterop:true, forceConsistentCasingInFileNames:true,
+            skipLibCheck:true, skipDefaultLibCheck:true
+          });
+          const types=new Set([...(j.compilerOptions.types||[]),'node']); j.compilerOptions.types=[...types];
+          if(!j.include) j.include=['src','out','typings'];
+          fs.writeFileSync(p,JSON.stringify(j,null,2));
+          console.log('tsconfig.json ok');
           NODE
+          npm i -D @types/node@^20 --no-audit --no-fund
 
-      - name: Build (se existir script)
+      - name: Build (se existir)
         working-directory: ${{ env.EXT_DIR }}
-        run: npm run -s build || echo "Sem script de build; seguindo."
+        run: npm run -s build || echo "Sem script de build"
 
-      - name: Instalar vsce (última)
-        run: npm i -g @vscode/vsce
+      - name: Instalar CLIs (vsce/ovsx)
+        run: |
+          npm i -g @vscode/vsce ovsx
 
-      - name: Empacotar extensão (.vsix)
+      - name: Empacotar (.vsix)
         working-directory: ${{ env.EXT_DIR }}
         run: |
           set -euxo pipefail
+          # Se "files" inclui CHANGELOG.md mas ele não existe, remova para não quebrar
+          if jq -e '.files?|index("CHANGELOG.md")' package.json >/dev/null 2>&1 && [ ! -f CHANGELOG.md ]; then
+            echo "::warning::Removendo CHANGELOG.md de files[] para evitar erro do vsce"
+            jq 'del(.files[] | select(.=="CHANGELOG.md"))' package.json > package.tmp && mv package.tmp package.json
+          fi
           vsce package -o "../${{ env.VSIX_NAME }}"
 
       - name: Upload artifact (.vsix)
@@ -168,7 +154,26 @@ jobs:
           path: ${{ env.VSIX_NAME }}
           if-no-files-found: error
 
-      - name: Criar e enviar tag (idempotente)
+      - name: Publicar no VS Code Marketplace (vsce)
+        if: ${{ secrets.VSCE_PAT != '' }}
+        working-directory: ${{ env.EXT_DIR }}
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        run: |
+          set -euxo pipefail
+          if ${{ inputs.prerelease }}; then
+            vsce publish --pre-release --packagePath "../${{ env.VSIX_NAME }}"
+          else
+            vsce publish --packagePath "../${{ env.VSIX_NAME }}"
+          fi
+
+      - name: Publicar no Open VSX (opcional)
+        if: ${{ secrets.OPEN_VSX_TOKEN != '' }}
+        run: |
+          set -euxo pipefail
+          ovsx publish "${{ env.VSIX_NAME }}" -p "${{ secrets.OPEN_VSX_TOKEN }}"
+
+      - name: Criar/empurrar tag
         shell: bash
         env:
           TAG_NAME: ${{ inputs.version }}
@@ -179,34 +184,17 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git remote set-url origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
           git fetch --tags --force --prune
-          if git rev-parse -q --verify "refs/tags/${TAG_NAME}" >/dev/null; then
-            echo "Tag ${TAG_NAME} já existe localmente."
-          else
-            git tag -a "${TAG_NAME}" -m "Release ${TAG_NAME}"
-          fi
-          if git ls-remote --exit-code --tags origin "refs/tags/${TAG_NAME}" >/dev/null 2>&1; then
-            echo "Tag ${TAG_NAME} já existe no remoto; seguindo."
-          else
-            git push origin "refs/tags/${TAG_NAME}"
-          fi
+          git tag -a "${TAG_NAME}" -m "Release ${TAG_NAME}" || true
+          git push origin "refs/tags/${TAG_NAME}" || true
 
-      - name: Criar Release com tag e anexar VSIX
+      - name: Criar Release e anexar VSIX
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ inputs.version }}
-          name: teleplot VSCode ${{ inputs.version }}
+          name: LasecPlot VSCode ${{ inputs.version }}
           body: ${{ inputs.notes }}
           prerelease: ${{ inputs.prerelease }}
           target_commitish: ${{ github.sha }}
           files: ${{ env.VSIX_NAME }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      # Publicação opcional:
-      # - name: Publicar em VSCode Marketplace / Open VSX
-      #   if: ${{ !cancelled() }}
-      #   uses: HaaLeo/publish-vscode-extension@v2
-      #   with:
-      #     pat: ${{ secrets.VSCE_PAT }}
-      #     extensionFile: ${{ env.VSIX_NAME }}
-      #     ovsxToken: ${{ secrets.OPEN_VSX_TOKEN }}
