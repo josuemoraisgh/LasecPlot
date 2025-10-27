@@ -33,19 +33,22 @@ function stopUdpServer() {
 
 function startUdpServer() {
   stopUdpServer();
-  udpServer = udp.createSocket('udp4');
-  udpServer.bind(udpPort);
+
+  const s: UdpSocket = udp.createSocket('udp4'); // cria o socket
+  s.bind(udpPort);
+
   // Relay UDP packets para a webview
-  udpServer.on('message', (msg: any) => {
+  s.on('message', (msg: any) => {
     if (currentPanel) {
       currentPanel.webview.postMessage({
         data: msg.toString(),
         fromSerial: false,
-        timestamp: new Date().getTime(),
+        timestamp: Date.now(),
       });
     }
   });
-  console.log(`[Teleplot] UDP server ouvindo em ${udpPort}`);
+
+  udpServer = s; // só atribui no fim, evitando estado parcial
 }
 
 function startTeleplotServer() {
