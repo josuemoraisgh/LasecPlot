@@ -36,7 +36,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: true
 
-      # ⚠️ Node 20: garante global File para o vsce/undici
+      # Node 20: necessário para o vsce (undici precisa de global File)
       - name: Configurar Node.js (20.x)
         uses: actions/setup-node@v4
         with:
@@ -81,7 +81,6 @@ jobs:
             BASE="${BASH_REMATCH[1]}"
             PRE="${BASH_REMATCH[2],,}"
             NUM="${BASH_REMATCH[3]}"
-            # remove zeros à esquerda
             NUM=$((10#$NUM))
             SANITIZED="${BASE}-${PRE}.${NUM}"
           fi
@@ -127,6 +126,51 @@ jobs:
               echo "::warning::npm install --omit=optional falhou; tentando npm install padrão."
               npm install --no-audit --no-fund
             fi
+          fi
+
+      # 🩹 Patches para evitar TS2416 com @serialport/stream:
+      # - força @types/node compatível com Node 20
+      # - ativa skipLibCheck no tsconfig.json
+      - name: Higienizar TypeScript/Node typings
+        shell: bash
+        working-directory: ${{ env.EXT_DIR }}
+        run: |
+          set -euxo pipefail
+          # Garante @types/node alinhado ao runtime
+          npm install -D @types/node@^20 --no-audit --no-fund
+
+          # Patch no tsconfig.json (cria se não existir)
+          if [ ! -f tsconfig.json ]; then
+            cat > tsconfig.json <<'JSON'
+          {
+            "compilerOptions": {
+              "target": "ES2020",
+              "module": "commonjs",
+              "strict": true,
+              "skipLibCheck": true,
+              "skipDefaultLibCheck": true,
+              "esModuleInterop": true,
+              "forceConsistentCasingInFileNames": true,
+              "moduleResolution": "node",
+              "types": ["node"]
+            },
+            "include": ["src", "out", "typings"]
+          }
+JSON
+          else
+            node -e '
+const fs=require("fs");
+const p="tsconfig.json";
+const j=JSON.parse(fs.readFileSync(p,"utf8"));
+j.compilerOptions=j.compilerOptions||{};
+j.compilerOptions.skipLibCheck=true;
+j.compilerOptions.skipDefaultLibCheck=true;
+j.compilerOptions.types=[...(new Set([...(j.compilerOptions.types||[]),"node"]))];
+if(!j.compilerOptions.moduleResolution) j.compilerOptions.moduleResolution="node";
+if(!j.compilerOptions.target) j.compilerOptions.target="ES2020";
+fs.writeFileSync(p,JSON.stringify(j,null,2));
+console.log("tsconfig.json atualizado");
+'
           fi
 
       - name: Build (se existir script)
