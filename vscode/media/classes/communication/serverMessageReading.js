@@ -1,40 +1,34 @@
 //parses the message we received from the server
 
 function parseData(msgIn){
+  if(app.isViewPaused) return;
+  let now = new Date().getTime();
 
-    if(app.isViewPaused) return; // Do not buffer incomming data while paused
-    let now = new Date().getTime();
+  let fromSerial = msgIn.fromSerial || (msgIn.input && msgIn.input.type=="serial");
+  if(fromSerial) now = msgIn.timestamp;
+  now/=1000;
 
+  let msgList = (""+msgIn.data).split("\n");
 
-    let fromSerial = msgIn.fromSerial || (msgIn.input && msgIn.input.type=="serial");
-    if(fromSerial) now = msgIn.timestamp;
+  for (let msg of msgList) {
+    try {
+      // Inversão só para SERIAL
+      if (fromSerial && msg.startsWith(">")) msg = msg.substring(1);
+      else if (fromSerial && !msg.startsWith(">")) msg = ">:"+msg;
 
-    now/=1000; // we convert timestamp in seconds for uPlot to work
-    //parse msg
-    let msgList = (""+msgIn.data).split("\n");
+      // *** NOVO: via UDP, se começar com '>' mas for dado, remova o '>' inicial
+      if (!fromSerial && msg.startsWith(">") && msg.indexOf(":") > 1) {
+        msg = msg.substring(1);
+      }
 
-    for(let msg of msgList){
-        try{
-            // Inverted logic on serial port for usability
-            if(fromSerial && msg.startsWith(">")) msg = msg.substring(1);// remove '>' to consider as variable
-            else if(fromSerial && !msg.startsWith(">")) msg = ">:"+msg;// add '>' to consider as log
-            
-            // Command
-            if(msg.startsWith("|"))
-                parseCommandList(msg);
-            // Log
-            else if(msg.startsWith(">"))
-                parseLog(msg, now);
-            // 3D
-            else if (msg.substring(0,3) == "3D|")
-                parse3D(msg, now);
-            // Data
-            else
-                parseVariablesData(msg, now);
-        }
-        catch(e){console.log(e)}
-    }
+      if (msg.startsWith("|"))          parseCommandList(msg);
+      else if (msg.startsWith(">"))     parseLog(msg, now);
+      else if (msg.substring(0,3)=="3D|") parse3D(msg, now);
+      else                               parseVariablesData(msg, now);
+    } catch(e) { console.log(e); }
+  }
 }
+
 
 function parseCommandList(msg) // a String containing a list of commands, ex : "|sayHello|world|"
 {
@@ -75,8 +69,15 @@ function isTextFormatTelemetry(msg)
 
 // msg : a String containing data of a variable, ex : "myValue:1627551892437:1234|g"
 // now : a Number representing a timestamp 
-function parseVariablesData(msg, now)
-{
+function parseVariablesData(msg, now){
+    // --- SUPORTE UDP estilo "serial": nome>timestamp:valor§unidade|g ---
+    const firstColon = msg.indexOf(':');
+    const gt = msg.indexOf('>');
+    if (gt !== -1 && (firstColon === -1 || gt < firstColon)) {
+        msg = msg.slice(0, gt) + ':' + msg.slice(gt + 1);
+    }
+    // --------------------------------------------------------------------
+
     if(!msg.includes(':')) return;
 
     let startIdx = msg.indexOf(':');
