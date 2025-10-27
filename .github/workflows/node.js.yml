@@ -36,7 +36,6 @@ jobs:
           fetch-depth: 0
           persist-credentials: true
 
-      # Node 20: necessário para o vsce (undici precisa de global File)
       - name: Configurar Node.js (20.x)
         uses: actions/setup-node@v4
         with:
@@ -75,7 +74,6 @@ jobs:
           RAW="${{ inputs.version }}"
           RAW="${RAW//[[:space:]]/}"          # remove espaços
           SANITIZED="${RAW#[vV]}"             # remove prefixo v/V
-
           # Converte 0.0.1-RC1/RC01 => 0.0.1-rc.1 (sem zeros à esquerda)
           if [[ "$SANITIZED" =~ ^([0-9]+\.[0-9]+\.[0-9]+)-([A-Za-z]+)([0-9]+)$ ]]; then
             BASE="${BASH_REMATCH[1]}"
@@ -84,14 +82,11 @@ jobs:
             NUM=$((10#$NUM))
             SANITIZED="${BASE}-${PRE}.${NUM}"
           fi
-
           echo "SANITIZED_VERSION=$SANITIZED" >> "$GITHUB_ENV"
-
           if ! npm version "$SANITIZED" --no-git-tag-version; then
             echo "::error::Versão inválida para package.json: '$SANITIZED'. Use sem 'v/V' e em semver (ex.: 1.2.3, 1.2.3-rc.1)."
             exit 1
           fi
-
           NAME=$(node -e "console.log(require('./package.json').name)")
           PUB=$(node -e "console.log(require('./package.json').publisher)")
           if [ -z "${PUB:-}" ] || [ "$PUB" = "undefined" ]; then
@@ -101,7 +96,6 @@ jobs:
             VSIX="${PUB}.${NAME}-${SANITIZED}.vsix"
           fi
           echo "VSIX_NAME=$VSIX" >> "$GITHUB_ENV"
-
           ENG=$(node -e "console.log((require('./package.json').engines||{}).vscode||'')")
           if [ -z "$ENG" ] || [ "$ENG" = "undefined" ]; then
             echo "::warning::'engines.vscode' não definido; defina um range suportado (ex.: ^1.84.0)."
@@ -128,43 +122,28 @@ jobs:
             fi
           fi
 
-      # 🩹 Patches para evitar TS2416 com @serialport/stream:
-      # - força @types/node compatível com Node 20
-      # - ativa skipLibCheck no tsconfig.json
       - name: Higienizar TypeScript/Node typings
         shell: bash
         working-directory: ${{ env.EXT_DIR }}
         run: |
           set -euxo pipefail
-          # Garante @types/node alinhado ao runtime
           npm install -D @types/node@^20 --no-audit --no-fund
-
-          # Atualiza/cria tsconfig.json via Node (sem heredoc JSON, à prova de YAML)
           node <<'NODE'
           const fs = require('fs');
           const p = 'tsconfig.json';
           let j = {};
-          try { j = JSON.parse(fs.readFileSync(p, 'utf8')); } catch (e) {}
-
+          try { j = JSON.parse(fs.readFileSync(p, 'utf8')); } catch (_) {}
           j.compilerOptions = j.compilerOptions || {};
-          // flags que resolvem o TS2416 do @serialport/stream no CI
           j.compilerOptions.skipLibCheck = true;
           j.compilerOptions.skipDefaultLibCheck = true;
-
-          // garante alvos coerentes
           if (!j.compilerOptions.target) j.compilerOptions.target = 'ES2020';
           if (!j.compilerOptions.module) j.compilerOptions.module = 'commonjs';
           if (!j.compilerOptions.moduleResolution) j.compilerOptions.moduleResolution = 'node';
           if (j.compilerOptions.esModuleInterop === undefined) j.compilerOptions.esModuleInterop = true;
           if (j.compilerOptions.forceConsistentCasingInFileNames === undefined) j.compilerOptions.forceConsistentCasingInFileNames = true;
-
-          // adiciona types node sem duplicar
           const types = new Set([...(j.compilerOptions.types || []), 'node']);
           j.compilerOptions.types = Array.from(types);
-
-          // include padrão se ausente
           if (!j.include) j.include = ['src', 'out', 'typings'];
-
           fs.writeFileSync(p, JSON.stringify(j, null, 2));
           console.log('tsconfig.json atualizado');
           NODE
