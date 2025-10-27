@@ -139,39 +139,41 @@ jobs:
           # Garante @types/node alinhado ao runtime
           npm install -D @types/node@^20 --no-audit --no-fund
 
-          # Patch no tsconfig.json (cria se não existir)
+          # Cria ou atualiza tsconfig.json de forma à prova de YAML
           if [ ! -f tsconfig.json ]; then
             cat > tsconfig.json <<'JSON'
-          {
-            "compilerOptions": {
-              "target": "ES2020",
-              "module": "commonjs",
-              "strict": true,
-              "skipLibCheck": true,
-              "skipDefaultLibCheck": true,
-              "esModuleInterop": true,
-              "forceConsistentCasingInFileNames": true,
-              "moduleResolution": "node",
-              "types": ["node"]
-            },
-            "include": ["src", "out", "typings"]
-          }
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "commonjs",
+    "strict": true,
+    "skipLibCheck": true,
+    "skipDefaultLibCheck": true,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "moduleResolution": "node",
+    "types": ["node"]
+  },
+  "include": ["src", "out", "typings"]
+}
 JSON
           else
-            node -e '
-const fs=require("fs");
-const p="tsconfig.json";
-const j=JSON.parse(fs.readFileSync(p,"utf8"));
-j.compilerOptions=j.compilerOptions||{};
-j.compilerOptions.skipLibCheck=true;
-j.compilerOptions.skipDefaultLibCheck=true;
-j.compilerOptions.types=[...(new Set([...(j.compilerOptions.types||[]),"node"]))];
-if(!j.compilerOptions.moduleResolution) j.compilerOptions.moduleResolution="node";
-if(!j.compilerOptions.target) j.compilerOptions.target="ES2020";
-fs.writeFileSync(p,JSON.stringify(j,null,2));
-console.log("tsconfig.json atualizado");
-'
+            node - <<'NODE'
+const fs = require('fs');
+const p = 'tsconfig.json';
+const j = JSON.parse(fs.readFileSync(p, 'utf8'));
+j.compilerOptions = j.compilerOptions || {};
+j.compilerOptions.skipLibCheck = true;
+j.compilerOptions.skipDefaultLibCheck = true;
+const t = new Set([...(j.compilerOptions.types || []), 'node']);
+j.compilerOptions.types = [...t];
+if (!j.compilerOptions.moduleResolution) j.compilerOptions.moduleResolution = 'node';
+if (!j.compilerOptions.target) j.compilerOptions.target = 'ES2020';
+fs.writeFileSync(p, JSON.stringify(j, null, 2));
+console.log('tsconfig.json atualizado');
+NODE
           fi
+
 
       - name: Build (se existir script)
         working-directory: ${{ env.EXT_DIR }}
