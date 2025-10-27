@@ -1,67 +1,139 @@
-# This workflow will do a clean installation of node dependencies, cache/restore them, build the source code and run tests across different versions of node
-# For more information see: https://docs.github.com/en/actions/automating-builds-and-tests/building-and-testing-nodejs
-
-name: Server binaries
+name: VSCode Ext Build & Release (teleplot)
 
 on:
-  push:
-    branches: [ "main" ]
-  pull_request:
-    branches: [ "main" ]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Versão/Tag (ex.: v0.1.0)"
+        required: true
+        type: string
+      prerelease:
+        description: "Marcar como pré-release?"
+        required: false
+        default: false
+        type: boolean
+      notes:
+        description: "Notas da release (opcional)"
+        required: false
+        type: string
+
+permissions:
+  contents: write
 
 jobs:
-  build:
-    if: ${{ false }}  # disable for now
-    runs-on: ubuntu-18.04
-    strategy:
-      matrix:
-        include:
-          - arch: armv7
-            distro: ubuntu18.04
-            base: arm32v7/node:18-buster
-            target: node18-linuxstatic-armv7
-        #node-version: [14.x]
-        #pkg-target: ["node14-windows-x64", "node14-linux-x64", "node14-linux-armv7"]
-        # See supported Node.js release schedule at https://nodejs.org/en/about/releases/
+  build-release:
+    runs-on: ubuntu-latest
+
+    env:
+      EXT_DIR: vscode
+      # Nome do arquivo VSIX será definido após normalizar a versão
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
     steps:
-      - uses: actions/checkout@v3
-      - uses: uraimo/run-on-arch-action@v2
-        name: Build artifact
-        id: build
+      - name: Checkout
+        uses: actions/checkout@v4
         with:
-          #arch: ${{ matrix.arch }}
-          #distro: ${{ matrix.distro }}
-          base_image: ${{ matrix.base }}
-          githubToken: ${{ github.token }}
-          setup: |
-            mkdir -p "${PWD}/artifacts"
-          dockerRunArgs: |
-            --volume "${PWD}/artifacts:/artifacts"
-          env: | # YAML, but pipe character is necessary
-            artifact_name: git-${{ matrix.distro }}_${{ matrix.arch }}
-          shell: /bin/sh
-          install: |
-            case "${{ matrix.distro }}" in
-              ubuntu*|jessie|stretch|buster|bullseye)
-                apt-get update -q -y
-                apt-get install -q -y git
-                ;;
-              fedora*)
-                dnf -y update
-                dnf -y install git which
-                ;;
-              alpine*)
-                apk update
-                apk add git
-                ;;
-            esac
-          run: |
-            uname -a
-            cd server
-            npm i -g pkg
-            pkg --targets ${{ matrix.target }} --out-path /artifacts/ .
-            
-      - name: Show the artifact
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Configurar Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: |
+            ${{ env.EXT_DIR }}/package-lock.json
+            ${{ env.EXT_DIR }}/package.json
+
+      - name: Normalizar versão e preparar package.json
+        id: ver
+        shell: bash
+        working-directory: ${{ env.EXT_DIR }}
         run: |
-          ls -al "${PWD}/artifacts"
+          set -euxo pipefail
+          RAW="${{ inputs.version }}"
+          # remove prefixo 'v' se existir
+          SANITIZED="${RAW#v}"
+          echo "SANITIZED_VERSION=$SANITIZED" >> $GITHUB_ENV
+
+          # garante que package.json tenha 'version' coerente
+          npm pkg get name version publisher > /dev/null 2>&1 || true
+          npm version "$SANITIZED" --no-git-tag-version
+
+          # Derivar nome do VSIX: <publisher>.<name>-<version>.vsix (padrão do vsce)
+          NAME=$(node -e "console.log(require('./package.json').name)")
+          PUB=$(node -e "console.log(require('./package.json').publisher)")
+          if [ -z "$PUB" ] || [ "$PUB" = "undefined" ]; then
+            echo "::warning::Campo 'publisher' ausente em ${PWD}/package.json. Defina-o para publicar no Marketplace."
+            VSIX="teleplot-${SANITIZED}.vsix"
+          else
+            VSIX="${PUB}.${NAME}-${SANITIZED}.vsix"
+          fi
+          echo "VSIX_NAME=$VSIX" >> $GITHUB_ENV
+
+      - name: Instalar dependências
+        working-directory: ${{ env.EXT_DIR }}
+        run: npm ci
+
+      - name: Build (se existir script)
+        working-directory: ${{ env.EXT_DIR }}
+        run: npm run -s build || echo "Sem script de build; seguindo."
+
+      - name: Instalar vsce
+        run: npm i -g @vscode/vsce
+
+      - name: Empacotar extensão (.vsix)
+        working-directory: ${{ env.EXT_DIR }}
+        run: |
+          set -euxo pipefail
+          vsce package -o "../${{ env.VSIX_NAME }}"
+
+      - name: Upload artifact (.vsix)
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.VSIX_NAME }}
+          path: ${{ env.VSIX_NAME }}
+          if-no-files-found: error
+
+      - name: Criar e enviar tag (idempotente)
+        shell: bash
+        env:
+          TAG_NAME: ${{ inputs.version }}
+        run: |
+          set -euxo pipefail
+          git config --global --add safe.directory "$PWD"
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote set-url origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git fetch --tags --force --prune
+          if git rev-parse -q --verify "refs/tags/${TAG_NAME}" >/dev/null; then
+            echo "Tag ${TAG_NAME} já existe localmente."
+          else
+            git tag -a "${TAG_NAME}" -m "Release ${TAG_NAME}"
+          fi
+          if git ls-remote --exit-code --tags origin "refs/tags/${TAG_NAME}" >/dev/null 2>&1; then
+            echo "Tag ${TAG_NAME} já existe no remoto; seguindo."
+          else
+            git push origin "refs/tags/${TAG_NAME}"
+          fi
+
+      - name: Criar Release com tag e anexar VSIX
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.version }}
+          name: teleplot VSCode ${{ inputs.version }}
+          body: ${{ inputs.notes }}
+          prerelease: ${{ inputs.prerelease }}
+          target_commitish: ${{ github.sha }}
+          files: ${{ env.VSIX_NAME }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # (Opcional) Publicar no Marketplace / Open VSX — requer segredos
+      # - name: Publicar em VSCode Marketplace / Open VSX
+      #   if: ${{ !cancelled() }}
+      #   uses: HaaLeo/publish-vscode-extension@v2
+      #   with:
+      #     pat: ${{ secrets.VSCE_PAT }}        # crie um token pessoal em https://azure.microsoft.com/en-us/products/visual-studio-marketplace/
+      #     extensionFile: ${{ env.VSIX_NAME }} # publica o mesmo .vsix gerado
+      #     ovsxToken: ${{ secrets.OPEN_VSX_TOKEN }} # opcional: publica no open-vsx.org
