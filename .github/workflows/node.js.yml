@@ -1,3 +1,62 @@
+name: VSCode Ext Build & Release (teleplot)
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Versão/Tag (ex.: v0.1.0 ou V0.1.0-RC1)"
+        required: true
+        type: string
+      prerelease:
+        description: "Marcar como pré-release?"
+        required: false
+        default: false
+        type: boolean
+      notes:
+        description: "Notas da release (opcional)"
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build-release:
+    runs-on: ubuntu-latest
+
+    env:
+      EXT_DIR: vscode
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Configurar Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: |
+            ${{ env.EXT_DIR }}/package-lock.json
+            ${{ env.EXT_DIR }}/package.json
+
+      - name: Verificações mínimas
+        shell: bash
+        run: |
+          set -euxo pipefail
+          if [ ! -d "${{ env.EXT_DIR }}" ]; then
+            echo "::error::Diretório ${{ env.EXT_DIR }} não encontrado. Ajuste EXT_DIR ou crie a pasta da extensão."
+            exit 1
+          fi
+          if [ ! -f "${{ env.EXT_DIR }}/package.json" ]; then
+            echo "::error::package.json não encontrado em ${{ env.EXT_DIR }}."
+            exit 1
+          fi
+
       - name: Normalizar versão e preparar package.json
         id: ver
         shell: bash
@@ -10,19 +69,19 @@
           # remove prefixo v ou V
           SANITIZED="${RAW#[vV]}"
 
-          # Se vier algo como 0.0.1-RC1, converte para 0.0.1-rc.1
+          # Se vier algo como 0.0.1-RC1, converte para 0.0.1-rc.1 (semver)
           if [[ "$SANITIZED" =~ ^([0-9]+\.[0-9]+\.[0-9]+)-([A-Za-z]+)([0-9]+)$ ]]; then
             BASE="${BASH_REMATCH[1]}"
-            PRE="${BASH_REMATCH[2],,}"     # lowercase
+            PRE="${BASH_REMATCH[2],,}"
             NUM="${BASH_REMATCH[3]}"
             SANITIZED="${BASE}-${PRE}.${NUM}"
           fi
 
           echo "SANITIZED_VERSION=$SANITIZED" >> "$GITHUB_ENV"
 
-          # tenta aplicar no package.json; se falhar, mostra dica
+          # aplica no package.json; falha com mensagem clara se inválido
           if ! npm version "$SANITIZED" --no-git-tag-version; then
-            echo "::error::Versão inválida para package.json: '$SANITIZED'. Use sem 'v/V' e com semver válido (ex.: 1.2.3, 1.2.3-rc.1)."
+            echo "::error::Versão inválida para package.json: '$SANITIZED'. Use sem 'v/V' e em semver (ex.: 1.2.3, 1.2.3-rc.1)."
             exit 1
           fi
 
@@ -36,3 +95,76 @@
             VSIX="${PUB}.${NAME}-${SANITIZED}.vsix"
           fi
           echo "VSIX_NAME=$VSIX" >> "$GITHUB_ENV"
+
+          # Conferências úteis (opcional: falhar cedo se ausentes)
+          ENG=$(node -e "console.log((require('./package.json').engines||{}).vscode||'')")
+          if [ -z "$ENG" ] || [ "$ENG" = "undefined" ]; then
+            echo "::warning::'engines.vscode' não definido no package.json; defina um range suportado (ex.: ^1.84.0)."
+          fi
+
+      - name: Instalar dependências
+        working-directory: ${{ env.EXT_DIR }}
+        run: npm ci
+
+      - name: Build (se existir script)
+        working-directory: ${{ env.EXT_DIR }}
+        run: npm run -s build || echo "Sem script de build; seguindo."
+
+      - name: Instalar vsce
+        run: npm i -g @vscode/vsce
+
+      - name: Empacotar extensão (.vsix)
+        working-directory: ${{ env.EXT_DIR }}
+        run: |
+          set -euxo pipefail
+          vsce package -o "../${{ env.VSIX_NAME }}"
+
+      - name: Upload artifact (.vsix)
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.VSIX_NAME }}
+          path: ${{ env.VSIX_NAME }}
+          if-no-files-found: error
+
+      - name: Criar e enviar tag (idempotente)
+        shell: bash
+        env:
+          TAG_NAME: ${{ inputs.version }}
+        run: |
+          set -euxo pipefail
+          git config --global --add safe.directory "$PWD"
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote set-url origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git fetch --tags --force --prune
+          if git rev-parse -q --verify "refs/tags/${TAG_NAME}" >/dev/null; then
+            echo "Tag ${TAG_NAME} já existe localmente."
+          else
+            git tag -a "${TAG_NAME}" -m "Release ${TAG_NAME}"
+          fi
+          if git ls-remote --exit-code --tags origin "refs/tags/${TAG_NAME}" >/dev/null 2>&1; then
+            echo "Tag ${TAG_NAME} já existe no remoto; seguindo."
+          else
+            git push origin "refs/tags/${TAG_NAME}"
+          fi
+
+      - name: Criar Release com tag e anexar VSIX
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.version }}
+          name: teleplot VSCode ${{ inputs.version }}
+          body: ${{ inputs.notes }}
+          prerelease: ${{ inputs.prerelease }}
+          target_commitish: ${{ github.sha }}
+          files: ${{ env.VSIX_NAME }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # Publicação opcional (Marketplace VS Code / Open VSX):
+      # - name: Publicar em VSCode Marketplace / Open VSX
+      #   if: ${{ !cancelled() }}
+      #   uses: HaaLeo/publish-vscode-extension@v2
+      #   with:
+      #     pat: ${{ secrets.VSCE_PAT }}            # Token do Marketplace (vsce)
+      #     extensionFile: ${{ env.VSIX_NAME }}     # Reutiliza o .vsix gerado
+      #     ovsxToken: ${{ secrets.OPEN_VSX_TOKEN }}# (opcional) publicar no Open VSX
