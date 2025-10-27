@@ -34,7 +34,7 @@ function stopUdpServer() {
 function startUdpServer() {
   stopUdpServer();
 
-  const s: UdpSocket = udp.createSocket('udp4'); // cria o socket
+  const s: UdpSocket = udp.createSocket('udp4');
   s.bind(udpPort);
 
   // Relay UDP packets para a webview
@@ -48,12 +48,16 @@ function startUdpServer() {
     }
   });
 
-  udpServer = s; // só atribui no fim, evitando estado parcial
+  udpServer = s;
 }
 
 function startTeleplotServer() {
   loadPortsFromSettings();
   startUdpServer();
+  // Se já existe painel, informe as portas ativas ao front
+  if (currentPanel) {
+    currentPanel.webview.postMessage({ type: 'ports', udp: udpPort, cmd: cmdUdpPort });
+  }
 }
 
 export function activate(context: vscode.ExtensionContext) {
@@ -66,9 +70,10 @@ export function activate(context: vscode.ExtensionContext) {
 
       const column = vscode.window.activeTextEditor ? vscode.window.activeTextEditor.viewColumn : undefined;
 
-      // Se já existe um painel, apenas revela.
+      // Se já existe um painel, apenas revela e reenvia as portas.
       if (currentPanel) {
         currentPanel.reveal(column);
+        currentPanel.webview.postMessage({ type: 'ports', udp: udpPort, cmd: cmdUdpPort });
         return;
       }
 
@@ -87,10 +92,13 @@ export function activate(context: vscode.ExtensionContext) {
       currentPanel = panel;
 
       fs.readFile(path.join(context.extensionPath, 'media', 'index.html'), (err, data) => {
-        if (err) { console.error(err); return; }
+        if (err) {
+          console.error(err);
+          return;
+        }
         let rawHTML = data.toString();
 
-        // Reescreve URLs para dentro da webview
+        // Reescreve URLs para dentro da webview (src/href, aspas simples/duplas)
         rawHTML = rawHTML.replace(/\b(src|href)=["']([^"']+)["']/g, (_m, attr, rel) => {
           // ignora URLs absolutas (http/https) e anchors
           if (/^(https?:)?\/\//i.test(rel) || rel.startsWith('#')) return _m;
@@ -107,6 +115,9 @@ export function activate(context: vscode.ExtensionContext) {
         }
 
         panel.webview.html = rawHTML;
+
+        // Após carregar o HTML, informe as portas ao front
+        panel.webview.postMessage({ type: 'ports', udp: udpPort, cmd: cmdUdpPort });
       });
 
       panel.onDidDispose(() => {
@@ -149,6 +160,7 @@ export function activate(context: vscode.ExtensionContext) {
     if (e.affectsConfiguration('teleplot.udpPort') || e.affectsConfiguration('teleplot.cmdUdpPort')) {
       console.log('[Teleplot] Config alterada — reiniciando sockets com novas portas.');
       startTeleplotServer();
+      currentPanel?.webview.postMessage({ type: 'ports', udp: udpPort, cmd: cmdUdpPort });
     }
   });
   context.subscriptions.push(disp);
