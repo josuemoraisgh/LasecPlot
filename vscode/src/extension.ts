@@ -7,7 +7,10 @@ const Readline = require('@serialport/parser-readline');
 const udp = require('dgram');
 
 type UdpSocket = import('dgram').Socket;
+// topo do arquivo
+let lastUdpPeerIp = '127.0.0.1';
 
+// ...
 let serials: Record<string, any> = {};
 let udpServer: UdpSocket | null = null;
 let currentPanel: vscode.WebviewPanel | undefined;
@@ -26,7 +29,7 @@ function loadPortsFromSettings() {
 
 function stopUdpServer() {
   if (udpServer) {
-    try { udpServer.close(); } catch {}
+    try { udpServer.close(); } catch { }
     udpServer = null;
   }
 }
@@ -37,8 +40,10 @@ function startUdpServer() {
   const s: UdpSocket = udp.createSocket('udp4');
   s.bind(udpPort);
 
-  // Relay UDP packets para a webview
-  s.on('message', (msg: any) => {
+  s.on('message', (msg: any, rinfo: { address: string; port: number }) => {
+    // memorize o IP do último emissor
+    lastUdpPeerIp = rinfo.address || '127.0.0.1';
+
     if (currentPanel) {
       currentPanel.webview.postMessage({
         data: msg.toString(),
@@ -50,6 +55,7 @@ function startUdpServer() {
 
   udpServer = s;
 }
+
 
 function startLasecPlotServer() {
   loadPortsFromSettings();
@@ -117,7 +123,11 @@ export function activate(context: vscode.ExtensionContext) {
         panel.webview.html = rawHTML;
 
         // Após carregar o HTML, informe as portas ao front
-        panel.webview.postMessage({ type: 'ports', udp: udpPort, cmd: cmdUdpPort });
+        panel.webview.postMessage({
+          kind: 'udp-ready',
+          port: udpPort,
+          cmdPort: cmdUdpPort
+        });
       });
 
       panel.onDidDispose(() => {
@@ -128,7 +138,7 @@ export function activate(context: vscode.ExtensionContext) {
         }
         _disposables.length = 0;
         for (const s in serials) {
-          try { serials[s].close(); } catch {}
+          try { serials[s].close(); } catch { }
           serials[s] = null;
         }
         currentPanel = undefined;
@@ -138,7 +148,10 @@ export function activate(context: vscode.ExtensionContext) {
         if ('data' in message) {
           const udpClient = udp.createSocket('udp4');
           const buf = Buffer.isBuffer(message.data) ? message.data : Buffer.from(String(message.data));
-          udpClient.send(buf, 0, buf.length, cmdUdpPort, () => {
+
+          // Envia para o mesmo IP do último pacote recebido, na porta CMD
+          const host = lastUdpPeerIp || '127.0.0.1';
+          udpClient.send(buf, 0, buf.length, cmdUdpPort, host, () => {
             udpClient.close();
           });
         } else if ('cmd' in message) {
@@ -178,7 +191,7 @@ function runCmd(msg: any) {
   }
   else if (msg.cmd === 'connectSerialPort') {
     if (serials[id]) { // já existe
-      try { serials[id].close(); } catch {}
+      try { serials[id].close(); } catch { }
       delete serials[id];
     }
     serials[id] = new SerialPort({ baudRate: msg.baud, path: msg.port }, (err: any) => {
@@ -203,7 +216,7 @@ function runCmd(msg: any) {
     serials[id]?.write(msg.text);
   }
   else if (msg.cmd === 'disconnectSerialPort') {
-    try { serials[id]?.close(); } catch {}
+    try { serials[id]?.close(); } catch { }
     delete serials[id];
   }
   else if (msg.cmd === 'saveFile') {
@@ -236,7 +249,7 @@ function exportDataWithConfirmation(fileName: string, filters: { [name: string]:
 export function deactivate() {
   stopUdpServer();
   for (const s in serials) {
-    try { serials[s].close(); } catch {}
+    try { serials[s].close(); } catch { }
   }
   serials = {};
 }
