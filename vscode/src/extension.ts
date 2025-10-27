@@ -91,17 +91,14 @@ export function activate(context: vscode.ExtensionContext) {
         let rawHTML = data.toString();
 
         // Reescreve URLs para dentro da webview
-        const srcList = rawHTML.match(/src\=\"(.*)\"/g);
-        const hrefList = rawHTML.match(/href\=\"(.*)\"/g);
-        if (srcList != null && hrefList != null) {
-          for (const src of [...srcList, ...hrefList]) {
-            const url = src.split('"')[1];
-            const extensionURI = vscode.Uri.joinPath(context.extensionUri, './media/' + url);
-            const webURI = panel.webview.asWebviewUri(extensionURI);
-            const toReplace = src.replace(url, webURI.toString());
-            rawHTML = rawHTML.replace(src, toReplace);
-          }
-        }
+        rawHTML = rawHTML.replace(/\b(src|href)=["']([^"']+)["']/g, (_m, attr, rel) => {
+          // ignora URLs absolutas (http/https) e anchors
+          if (/^(https?:)?\/\//i.test(rel) || rel.startsWith('#')) return _m;
+          // normaliza contra a pasta media
+          const extensionURI = vscode.Uri.joinPath(context.extensionUri, 'media', rel);
+          const webURI = panel.webview.asWebviewUri(extensionURI);
+          return `${attr}="${webURI.toString()}"`;
+        });
 
         // Força tema padrão "dark" se houver marcador
         const teleplotStyle = rawHTML.match(/(.*)_teleplot_default_color_style(.*)/g);
