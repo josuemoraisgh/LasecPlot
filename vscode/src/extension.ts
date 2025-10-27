@@ -4,9 +4,9 @@ import * as fs from 'fs';
 import { ReadlineParser } from 'serialport';
 const { SerialPort } = require('serialport')//require('node-usb-native');
 const Readline = require('@serialport/parser-readline')
+import { getPorts } from './port-config';  // ← (1) NOVO IMPORT
 
-const UDP_PORT = 47269;
-const CMD_UDP_PORT = 47268;
+const { udp: UDP_PORT, rpc: CMD_UDP_PORT } = getPorts();  // ← (2) NOVO
 
 const udp = require('dgram');
 
