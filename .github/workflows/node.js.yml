@@ -27,7 +27,6 @@ jobs:
     env:
       EXT_DIR: vscode
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      # Evita build nativa desnecessária quando houver prebuild disponível
       npm_config_build_from_source: "false"
 
     steps:
@@ -37,16 +36,17 @@ jobs:
           fetch-depth: 0
           persist-credentials: true
 
-      - name: Configurar Node.js (use 18 para addon nativo)
+      # ⚠️ Node 20: garante global File para o vsce/undici
+      - name: Configurar Node.js (20.x)
         uses: actions/setup-node@v4
         with:
-          node-version: "18"
+          node-version: "20"
           cache: "npm"
           cache-dependency-path: |
             ${{ env.EXT_DIR }}/package-lock.json
             ${{ env.EXT_DIR }}/package.json
 
-      - name: Instalar dependências de sistema (libudev para usb-detection)
+      - name: Instalar dependências de sistema (para addons nativos)
         run: |
           sudo apt-get update -y
           sudo apt-get install -y --no-install-recommends \
@@ -73,14 +73,16 @@ jobs:
         run: |
           set -euxo pipefail
           RAW="${{ inputs.version }}"
-          RAW="${RAW//[[:space:]]/}"           # remove espaços
-          SANITIZED="${RAW#[vV]}"              # remove prefixo v/V
+          RAW="${RAW//[[:space:]]/}"          # remove espaços
+          SANITIZED="${RAW#[vV]}"             # remove prefixo v/V
 
-          # Converte 0.0.1-RC1 => 0.0.1-rc.1 (semver)
+          # Converte 0.0.1-RC1/RC01 => 0.0.1-rc.1 (sem zeros à esquerda)
           if [[ "$SANITIZED" =~ ^([0-9]+\.[0-9]+\.[0-9]+)-([A-Za-z]+)([0-9]+)$ ]]; then
             BASE="${BASH_REMATCH[1]}"
             PRE="${BASH_REMATCH[2],,}"
             NUM="${BASH_REMATCH[3]}"
+            # remove zeros à esquerda
+            NUM=$((10#$NUM))
             SANITIZED="${BASE}-${PRE}.${NUM}"
           fi
 
@@ -113,11 +115,8 @@ jobs:
           set -euxo pipefail
           npm config set fund false
           npm config set audit false
-
-          # 1) Com lockfile
           if [ -f package-lock.json ] || [ -f npm-shrinkwrap.json ]; then
             echo "Lockfile detectado."
-            # Tenta sem opcionais (evita addons problemáticos se forem opcionais)
             if ! npm ci --omit=optional; then
               echo "::warning::npm ci --omit=optional falhou; tentando npm ci padrão."
               npm ci
@@ -134,7 +133,7 @@ jobs:
         working-directory: ${{ env.EXT_DIR }}
         run: npm run -s build || echo "Sem script de build; seguindo."
 
-      - name: Instalar vsce
+      - name: Instalar vsce (última)
         run: npm i -g @vscode/vsce
 
       - name: Empacotar extensão (.vsix)
