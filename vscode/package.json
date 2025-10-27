@@ -3,7 +3,7 @@
   "displayName": "Teleplot",
   "description": "Teleplot - Ridiculously-simple telemetry viewer.",
   "version": "1.2.0",
-  "publisher": "Josue Morais",
+  "publisher": "josuemorais",
   "private": true,
   "license": "MIT",
   "repository": {
