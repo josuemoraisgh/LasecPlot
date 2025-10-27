@@ -1,255 +1,162 @@
+
 import * as vscode from 'vscode';
-import * as path from 'path';
-import * as fs from 'fs';
-import { ReadlineParser } from 'serialport';
-const { SerialPort } = require('serialport');
-const Readline = require('@serialport/parser-readline');
-const udp = require('dgram');
+import * as dgram from 'dgram';
+import { randomUUID } from 'crypto';
 
-type UdpSocket = import('dgram').Socket;
-// topo do arquivo
-let lastUdpPeerIp = '127.0.0.1';
-
-// ...
-let serials: Record<string, any> = {};
-let udpServer: UdpSocket | null = null;
-let currentPanel: vscode.WebviewPanel | undefined;
-let _disposables: vscode.Disposable[] = [];
-let statusBarIcon: vscode.StatusBarItem;
-
-// portas ativas (vindas das settings)
-let udpPort = 47269;     // telemetria (default)
-let cmdUdpPort = 47268;  // comandos (default)
-
-function loadPortsFromSettings() {
-  const cfg = vscode.workspace.getConfiguration('lasecplot');
-  udpPort = cfg.get<number>('udpPort', 47269);
-  cmdUdpPort = cfg.get<number>('cmdUdpPort', 47268);
-}
-
-function stopUdpServer() {
-  if (udpServer) {
-    try { udpServer.close(); } catch { }
-    udpServer = null;
-  }
-}
-
-function startUdpServer() {
-  stopUdpServer();
-
-  const s: UdpSocket = udp.createSocket('udp4');
-  s.bind(udpPort);
-
-  s.on('message', (msg: any, rinfo: { address: string; port: number }) => {
-    // memorize o IP do último emissor
-    lastUdpPeerIp = rinfo.address || '127.0.0.1';
-
-    if (currentPanel) {
-      currentPanel.webview.postMessage({
-        data: msg.toString(),
-        fromSerial: false,
-        timestamp: Date.now(),
-      });
-    }
-  });
-
-  udpServer = s;
-}
-
-
-function startLasecPlotServer() {
-  loadPortsFromSettings();
-  startUdpServer();
-  // Se já existe painel, informe as portas ativas ao front
-  if (currentPanel) {
-    currentPanel.webview.postMessage({ type: 'ports', udp: udpPort, cmd: cmdUdpPort });
-  }
-}
+type Target = { ip: string, port: number } | null;
 
 export function activate(context: vscode.ExtensionContext) {
-  // Carrega portas uma vez no início
-  loadPortsFromSettings();
+  const output = vscode.window.createOutputChannel('LasecPlot UDP');
+  const status = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
+  status.text = `LasecPlot: UDP Not connected`;
+  status.tooltip = 'Clique para abrir o painel Teleplot';
+  status.command = 'lasecplot.openSidebar';
+  status.show();
+  context.subscriptions.push(status);
 
-  context.subscriptions.push(
-    vscode.commands.registerCommand('lasecplot.start', () => {
-      startLasecPlotServer();
+  // Settings
+  const getUdpPort = () => vscode.workspace.getConfiguration('lasecplot').get<number>('udpPort', 47269);
+  const getCmdPort = () => vscode.workspace.getConfiguration('lasecplot').get<number>('cmdUdpPort', 47268);
 
-      const column = vscode.window.activeTextEditor ? vscode.window.activeTextEditor.viewColumn : undefined;
+  // Sockets
+  let listenSocket: dgram.Socket | null = null;
+  let sendSocket: dgram.Socket | null = null;
+  let target: Target = null;
+  const clientId = context.globalState.get<string>('clientId') || randomUUID();
+  context.globalState.update('clientId', clientId);
 
-      // Se já existe um painel, apenas revela e reenvia as portas.
-      if (currentPanel) {
-        currentPanel.reveal(column);
-        currentPanel.webview.postMessage({ type: 'ports', udp: udpPort, cmd: cmdUdpPort });
-        return;
-      }
+  function setTarget(t: Target){
+    target = t;
+    context.globalState.update('lastTarget', t ? `${t.ip}:${t.port}` : '');
+    updateStatus(false);
+  }
+  function updateStatus(connected: boolean){
+    status.text = connected && target ? `LasecPlot UDP: ${target.ip}:${target.port}` : 'LasecPlot: UDP Not connected';
+    if(panelView){
+      panelView.webview.postMessage({type:'status', connected, target: target ? `${target.ip}:${target.port}` : ''});
+    }
+  }
 
-      // Cria o painel novo.
-      const panel = vscode.window.createWebviewPanel(
-        'lasecplot',
-        'LasecPlot',
-        column || vscode.ViewColumn.One,
-        {
-          enableScripts: true,
-          localResourceRoots: [vscode.Uri.file(path.join(context.extensionPath, 'media'))],
-          retainContextWhenHidden: true,
-          enableCommandUris: true,
-        }
-      );
-      currentPanel = panel;
-
-      fs.readFile(path.join(context.extensionPath, 'media', 'index.html'), (err, data) => {
-        if (err) {
-          console.error(err);
-          return;
-        }
-        let rawHTML = data.toString();
-
-        // Reescreve URLs para dentro da webview (src/href, aspas simples/duplas)
-        rawHTML = rawHTML.replace(/\b(src|href)=["']([^"']+)["']/g, (_m, attr, rel) => {
-          // ignora URLs absolutas (http/https) e anchors
-          if (/^(https?:)?\/\//i.test(rel) || rel.startsWith('#')) return _m;
-          // normaliza contra a pasta media
-          const extensionURI = vscode.Uri.joinPath(context.extensionUri, 'media', rel);
-          const webURI = panel.webview.asWebviewUri(extensionURI);
-          return `${attr}="${webURI.toString()}"`;
-        });
-
-        // Força tema padrão "dark" se houver marcador
-        const lasecplotStyle = rawHTML.match(/(.*)_lasecplot_default_color_style(.*)/g);
-        if (lasecplotStyle != null) {
-          rawHTML = rawHTML.replace(lasecplotStyle.toString(), 'var _lasecplot_default_color_style = "dark";');
-        }
-
-        panel.webview.html = rawHTML;
-
-        // Após carregar o HTML, informe as portas ao front
-        panel.webview.postMessage({
-          kind: 'udp-ready',
-          port: udpPort,
-          cmdPort: cmdUdpPort
-        });
+  function ensureSockets(){
+    if(!sendSocket){
+      sendSocket = dgram.createSocket('udp4');
+      context.subscriptions.push({dispose: ()=>sendSocket?.close()});
+    }
+    const port = getUdpPort();
+    if(!listenSocket){
+      listenSocket = dgram.createSocket('udp4');
+      listenSocket.on('error', (err)=>{
+        output.appendLine(`[listen:error] ${err.message}`);
       });
-
-      panel.onDidDispose(() => {
-        stopUdpServer();
-        while (_disposables.length) {
-          const x = _disposables.pop();
-          if (x) x.dispose();
+      listenSocket.on('message', (msg, rinfo)=>{
+        // filter by target ip and configured udpPort
+        if(target && rinfo.address === target.ip && rinfo.port === getUdpPort()){
+          const text = msg.toString('utf8');
+          output.appendLine(`[udp ${rinfo.address}:${rinfo.port}] ${text.trim()}`);
+          panelView?.webview.postMessage({type:'udpData', text});
+          panelView?.webview.postMessage({type:'log', text});
+          // TODO: despachar para parser de gráfico, se existir
+        } else {
+          // Ignora mensagens que não são do alvo esperado
         }
-        _disposables.length = 0;
-        for (const s in serials) {
-          try { serials[s].close(); } catch { }
-          serials[s] = null;
-        }
-        currentPanel = undefined;
-      }, null, _disposables);
+      });
+      listenSocket.bind(port, ()=>{
+        output.appendLine(`[listen] Bind UDP ${port}`);
+      });
+      context.subscriptions.push({dispose: ()=>listenSocket?.close()});
+    } else {
+      // rebind if port changed
+      const addr = listenSocket.address();
+      if(typeof addr === 'object' && addr.port !== port){
+        try { listenSocket.close(); } catch {}
+        listenSocket = null;
+        ensureSockets();
+      }
+    }
+  }
+  ensureSockets();
 
-      panel.webview.onDidReceiveMessage(message => {
-        if ('data' in message) {
-          const udpClient = udp.createSocket('udp4');
-          const buf = Buffer.isBuffer(message.data) ? message.data : Buffer.from(String(message.data));
+  // Sidebar View
+  let panelView: vscode.WebviewView | null = null;
+  context.subscriptions.push(
+    vscode.window.registerWebviewViewProvider('lasecplot.teleplotSidebar', {
+      resolveWebviewView(webviewView: vscode.WebviewView) {
+        panelView = webviewView;
+        webviewView.webview.options = { enableScripts: true };
+        const nonce = `${Date.now()}`;
+        const html = getWebviewHtml(webviewView.webview, context, nonce);
+        webviewView.webview.html = html;
+        const last = context.globalState.get<string>('lastTarget','');
+        webviewView.webview.postMessage({type:'preset', ip: last ? last.split(':')[0] : ''});
+        updateStatus(!!target);
 
-          // Envia para o mesmo IP do último pacote recebido, na porta CMD
-          const host = lastUdpPeerIp || '127.0.0.1';
-          udpClient.send(buf, 0, buf.length, cmdUdpPort, host, () => {
-            udpClient.close();
-          });
-        } else if ('cmd' in message) {
-          runCmd(message);
-        }
-      }, null, _disposables);
+        webviewView.webview.onDidReceiveMessage((msg)=>{
+          switch(msg.type){
+            case 'connect': {
+              const raw: string = (msg.ip || '').trim();
+              if(!raw){ vscode.window.showWarningMessage('Informe um IP válido.'); return; }
+              let ip = raw;
+              let port = getCmdPort();
+              if(raw.includes(':')){
+                const [a,b] = raw.split(':');
+                ip = a;
+                const p = Number(b);
+                if(!Number.isNaN(p) && p>0 && p<65536) port = p;
+              }
+              setTarget({ip, port});
+              ensureSockets();
+              // send CONNECT <clientId>\n
+              try {
+                const payload = Buffer.from(`CONNECT ${clientId}\n`, 'utf8');
+                sendSocket!.send(payload, port, ip);
+                updateStatus(true);
+                panelView?.webview.postMessage({type:'log', text: `[send] CONNECT ${clientId}`});
+              } catch(e:any){
+                vscode.window.showErrorMessage('Falha ao enviar CONNECT: ' + e.message);
+                updateStatus(false);
+              }
+              break;
+            }
+            case 'cancel': {
+              setTarget(null);
+              updateStatus(false);
+              break;
+            }
+            case 'send': {
+              if(!target){ vscode.window.showWarningMessage('Defina o IP e conecte antes de enviar.'); return; }
+              const text: string = String(msg.text ?? '');
+              if(!text) return;
+              const payload = Buffer.from(text + '\n', 'utf8');
+              try{
+                sendSocket!.send(payload, target.port, target.ip);
+                panelView?.webview.postMessage({type:'log', text: `[send] ${text}`});
+              }catch(e:any){
+                vscode.window.showErrorMessage('Falha ao enviar: ' + e.message);
+              }
+              break;
+            }
+          }
+        });
+      }
     })
   );
 
-  // Status bar
-  statusBarIcon = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
-  statusBarIcon.command = 'lasecplot.start';
-  statusBarIcon.text = '$(graph-line) LasecPlot';
-  context.subscriptions.push(statusBarIcon);
-  statusBarIcon.show();
+  context.subscriptions.push(
+    vscode.commands.registerCommand('lasecplot.openSidebar', ()=>{
+      vscode.commands.executeCommand('workbench.view.extension.lasecplot');
+    })
+  );
 
-  // Reagir a mudanças nas configurações (reinicia server e passa a usar nova porta)
-  const disp = vscode.workspace.onDidChangeConfiguration(e => {
-    if (e.affectsConfiguration('lasecplot.udpPort') || e.affectsConfiguration('lasecplot.cmdUdpPort')) {
-      console.log('[LasecPlot] Config alterada — reiniciando sockets com novas portas.');
-      startLasecPlotServer();
-      currentPanel?.webview.postMessage({ type: 'ports', udp: udpPort, cmd: cmdUdpPort });
-    }
-  });
-  context.subscriptions.push(disp);
-}
-
-var dataBuffer = '';
-function runCmd(msg: any) {
-  const id = ('id' in msg) ? msg.id : '';
-  if (msg.cmd === 'listSerialPorts') {
-    SerialPort.list().then((ports: any) => {
-      if (currentPanel) {
-        currentPanel.webview.postMessage({ id, cmd: 'serialPortList', list: ports });
-      }
-    });
-  }
-  else if (msg.cmd === 'connectSerialPort') {
-    if (serials[id]) { // já existe
-      try { serials[id].close(); } catch { }
-      delete serials[id];
-    }
-    serials[id] = new SerialPort({ baudRate: msg.baud, path: msg.port }, (err: any) => {
-      if (err) {
-        console.log('serial error:', err);
-        currentPanel?.webview.postMessage({ id, cmd: 'serialPortError', port: msg.port, baud: msg.baud });
-      } else {
-        console.log('serial open');
-        currentPanel?.webview.postMessage({ id, cmd: 'serialPortConnect', port: msg.port, baud: msg.baud });
-      }
-    });
-
-    const parser = serials[id].pipe(new ReadlineParser({ delimiter: '\n' }));
-    parser.on('data', (data: any) => {
-      currentPanel?.webview.postMessage({ id, data: String(data), fromSerial: true, timestamp: new Date().getTime() });
-    });
-    serials[id].on('close', (_err: any) => {
-      currentPanel?.webview.postMessage({ id, cmd: 'serialPortDisconnect' });
-    });
-  }
-  else if (msg.cmd === 'sendToSerial') {
-    serials[id]?.write(msg.text);
-  }
-  else if (msg.cmd === 'disconnectSerialPort') {
-    try { serials[id]?.close(); } catch { }
-    delete serials[id];
-  }
-  else if (msg.cmd === 'saveFile') {
-    try {
-      exportDataWithConfirmation(path.join(msg.file.name), { JSON: ['json'] }, msg.file.content);
-    } catch (error) {
-      void vscode.window.showErrorMessage("Couldn't write file: " + error);
-    }
-  }
-}
-
-function exportDataWithConfirmation(fileName: string, filters: { [name: string]: string[] }, data: string): void {
-  void vscode.window.showSaveDialog({
-    defaultUri: vscode.Uri.file(fileName),
-    filters,
-  }).then((uri: vscode.Uri | undefined) => {
-    if (uri) {
-      const value = uri.fsPath;
-      fs.writeFile(value, data, (error: any) => {
-        if (error) {
-          void vscode.window.showErrorMessage('Could not write to file: ' + value + ': ' + error.message);
-        } else {
-          void vscode.window.showInformationMessage('Saved ' + value);
-        }
-      });
+  vscode.workspace.onDidChangeConfiguration(e=>{
+    if(e.affectsConfiguration('lasecplot.udpPort')){
+      ensureSockets();
     }
   });
 }
 
-export function deactivate() {
-  stopUdpServer();
-  for (const s in serials) {
-    try { serials[s].close(); } catch { }
-  }
-  serials = {};
+function getWebviewHtml(webview: vscode.Webview, context: vscode.ExtensionContext, nonce: string){
+  const tpl = require('fs').readFileSync(context.asAbsolutePath('media/teleplot.html'), 'utf8');
+  return tpl.replace('{{nonce}}', nonce);
 }
+
+export function deactivate(){}

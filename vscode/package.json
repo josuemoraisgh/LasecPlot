@@ -1,93 +1,65 @@
 {
   "name": "lasecplot",
   "displayName": "LasecPlot",
-  "description": "Telemetry viewer.",
-  "version": "1.2.0",
-  "publisher": "josuemoraisgh",
-  "private": true,
-  "license": "MIT",
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/josuemoraisgh/LasecPlot"
-  },
+  "description": "Teleplot UDP connector + command panel for LasecPlot",
+  "version": "0.1.0",
+  "publisher": "your-publisher",
   "engines": {
-    "vscode": "^1.47.0"
+    "vscode": "^1.85.0"
   },
   "categories": [
     "Other"
   ],
   "activationEvents": [
     "onStartupFinished",
-    "onCommand:lasecplot.start",
-    "onWebviewPanel:lasecplot"
+    "onView:lasecplot.teleplotSidebar"
   ],
-  "main": "./out/extension.js",
-  "icon": "images/logo-color.png",
-
+  "main": "./dist/extension.js",
   "contributes": {
-    "commands": [
-      {
-        "command": "lasecplot.start",
-        "title": "Start lasecplot session",
-        "category": "lasecplot",
-        "icon": {
-          "light": "images/logo-color.svg",
-          "dark": "images/logo-color.svg"
-        }
-      }
-    ],
     "configuration": {
-      "title": "lasecplot",
+      "title": "LasecPlot",
       "properties": {
         "lasecplot.udpPort": {
           "type": "number",
           "default": 47269,
-          "minimum": 1,
-          "maximum": 65535,
-          "description": "Porta UDP de telemetria (entrada de dados)."
+          "description": "Porta UDP de escuta (listener) para dados Teleplot."
         },
         "lasecplot.cmdUdpPort": {
           "type": "number",
           "default": 47268,
-          "minimum": 1,
-          "maximum": 65535,
-          "description": "Porta UDP de comandos (ex-RPC)."
+          "description": "Porta UDP de comando (envio) para o servidor Teleplot."
         }
       }
+    },
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "lasecplot",
+          "title": "LasecPlot",
+          "icon": "media/lasecplot.svg"
+        }
+      ]
+    },
+    "views": {
+      "lasecplot": [
+        {
+          "id": "lasecplot.teleplotSidebar",
+          "name": "Teleplot UDP"
+        }
+      ]
     }
   },
-
   "scripts": {
-    "vscode:prepublish": "echo Dont forget to run extension first so source files are updated by pre_launch task && npm run compile",
+    "vscode:prepublish": "npm run compile",
     "compile": "tsc -p ./",
-    "rebuild:native-modules": "node ./node_modules/electron-rebuild/lib/cli.js --version 1.4.13",
-    "lint": "eslint . --ext .ts,.tsx",
-    "watch": "tsc -w -p ./"
-  },
-
-  "files": [
-    "out/**",
-    "media/**",
-    "images/**",
-    "README.md",
-    "LICENSE*"
-  ],
-
-  "dependencies": {
-    "dgram": "^1.0.1",
-    "node-usb-native": "^0.0.20",
-    "serialport": "^10.4.0",
-    "vsce": "^2.9.2"
+    "watch": "tsc -watch -p ./",
+    "package": "vsce package"
   },
   "devDependencies": {
-    "@types/node": "^12.12.0",
-    "@types/vscode": "^1.47.0",
-    "@types/vscode-webview": "^1.57.0",
-    "@typescript-eslint/eslint-plugin": "^4.16.0",
-    "@typescript-eslint/parser": "^4.16.0",
-    "electron-prebuilt": "1.4.13",
-    "electron-rebuild": "^3.2.3",
-    "eslint": "^7.21.0",
-    "typescript": "^4.4.3"
-  }
+    "@types/node": "^18.19.0",
+    "@types/vscode": "^1.85.0",
+    "typescript": "^5.6.3",
+    "vsce": "^2.15.0"
+  },
+  "dependencies": {}
 }

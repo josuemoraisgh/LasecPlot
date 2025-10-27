@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+<meta charset="UTF-8" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src vscode-resource: https:; style-src 'unsafe-inline'; script-src 'nonce-{{nonce}}';" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LasecPlot Teleplot</title>
+<style>
+body { font-family: var(--vscode-font-family); padding: 8px; }
+.row { display:flex; gap:8px; align-items:center; }
+.input { flex:1; }
+.badge { padding:2px 6px; border-radius: 6px; font-size: 11px; }
+.badge.ok { background: #2ea043; color:white; }
+.badge.err { background: #d73a49; color:white; }
+.log { width:100%; height:180px; }
+small.mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
+hr{ margin:8px 0; }
+</style>
+<script nonce="{{nonce}}" src="serverMessageReading.shim.js"></script>
+</head>
+<body>
+<div class="row">
+  <input id="ip" class="input" type="text" placeholder="IP of teleplot server (ex.: 192.168.0.10 ou 192.168.0.10:47569)">
+  <button id="connect">Connect</button>
+  <button id="cancel">Cancel</button>
+</div>
+<div class="row" style="margin-top:6px">
+  <div>Estado: <span id="status" class="badge err">Not connected</span></div>
+  <div style="margin-left:auto"><small class="mono" id="target"></small></div>
+</div>
+<hr />
+<div>
+  <div class="row">
+    <input id="cmd" class="input" type="text" placeholder="Digite um comando e clique em Send">
+    <button id="send">Send</button>
+  </div>
+</div>
+<hr />
+<textarea id="log" class="log" readonly></textarea>
+<script nonce="{{nonce}}">
+const vscode = acquireVsCodeApi();
+const ip = document.getElementById('ip');
+const btnConn = document.getElementById('connect');
+const btnCancel = document.getElementById('cancel');
+const btnSend = document.getElementById('send');
+const cmd = document.getElementById('cmd');
+const status = document.getElementById('status');
+const log = document.getElementById('log');
+const target = document.getElementById('target');
+
+btnConn.addEventListener('click', ()=>{
+  vscode.postMessage({type:'connect', ip: ip.value});
+});
+btnCancel.addEventListener('click', ()=>{
+  vscode.postMessage({type:'cancel'});
+});
+btnSend.addEventListener('click', ()=>{
+  vscode.postMessage({type:'send', text: cmd.value});
+  cmd.value = '';
+  cmd.focus();
+});
+window.addEventListener('message', event => {
+  const m = event.data;
+  if(m.type==='status'){
+    status.textContent = m.connected ? 'Connected' : 'Not connected';
+    status.className = 'badge ' + (m.connected ? 'ok' : 'err');
+    target.textContent = m.target || '';
+  }
+
+  if(m.type==='udpData'){
+    // 1) If the project already defines a parser like serverMessageReading.js,
+    // try to call it so the behavior matches the Serial flow.
+    try {
+      if (window.ServerMessageReading && typeof window.ServerMessageReading.parse === 'function') {
+        window.ServerMessageReading.parse(m.text);
+      } else if (typeof window.handleServerDatagram === 'function') {
+        window.handleServerDatagram(m.text);
+      }
+    } catch(e) {
+      // fall through to log
+    }
+  }
+  if(m.type==='log'){
+    log.value += m.text + '\n';
+    log.scrollTop = log.scrollHeight;
+  }
+  if(m.type==='preset'){
+    ip.value = m.ip || '';
+  }
+});
+</script>
+</body>
+</html>
