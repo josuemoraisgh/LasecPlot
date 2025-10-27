@@ -1,14 +1,14 @@
 {
-  "name": "teleplot",
-  "displayName": "Teleplot",
-  "description": "Teleplot - Ridiculously-simple telemetry viewer.",
+  "name": "lasecplot",
+  "displayName": "LasecPlot",
+  "description": "Telemetry viewer.",
   "version": "1.2.0",
   "publisher": "josuemoraisgh",
   "private": true,
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/josuemoraisgh/teleplot"
+    "url": "https://github.com/josuemoraisgh/LasecPlot"
   },
   "engines": {
     "vscode": "^1.47.0"
@@ -18,8 +18,8 @@
   ],
   "activationEvents": [
     "onStartupFinished",
-    "onCommand:teleplot.start",
-    "onWebviewPanel:teleplot"
+    "onCommand:lasecplot.start",
+    "onWebviewPanel:lasecplot"
   ],
   "main": "./out/extension.js",
   "icon": "images/logo-color.png",
@@ -27,9 +27,9 @@
   "contributes": {
     "commands": [
       {
-        "command": "teleplot.start",
-        "title": "Start teleplot session",
-        "category": "teleplot",
+        "command": "lasecplot.start",
+        "title": "Start lasecplot session",
+        "category": "lasecplot",
         "icon": {
           "light": "images/logo-color.svg",
           "dark": "images/logo-color.svg"
@@ -37,16 +37,16 @@
       }
     ],
     "configuration": {
-      "title": "Teleplot",
+      "title": "lasecplot",
       "properties": {
-        "teleplot.udpPort": {
+        "lasecplot.udpPort": {
           "type": "number",
           "default": 47269,
           "minimum": 1,
           "maximum": 65535,
           "description": "Porta UDP de telemetria (entrada de dados)."
         },
-        "teleplot.cmdUdpPort": {
+        "lasecplot.cmdUdpPort": {
           "type": "number",
           "default": 47268,
           "minimum": 1,

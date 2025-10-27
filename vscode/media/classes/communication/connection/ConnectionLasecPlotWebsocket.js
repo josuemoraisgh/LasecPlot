@@ -1,8 +1,8 @@
-class ConnectionTeleplotWebsocket extends Connection{
+class ConnectionLasecPlotWebsocket extends Connection{
     constructor(){
         super();
         this.name=""
-        this.type = "teleplot-websocket";
+        this.type = "lasecplot-websocket";
         this.inputs = [];
         this.socket = null;
         this.address = "";

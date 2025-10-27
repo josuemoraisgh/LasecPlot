@@ -34,7 +34,7 @@ function initializeAppView()
             creatingConnection: false,
             telemetryFilterString: "",
             isViewPaused: false,
-            colorStyle: _teleplot_default_color_style || "light",
+            colorStyle: _lasecplot_default_color_style || "light",
             csvExportView: false,
             csvDecimalSeparator: ".",
             csvCellSeparator: ","
@@ -203,7 +203,7 @@ function initializeAppView()
                 onMouseDownOnResizeButton_(event, widget);                
             },
             createConnection: function(address_=undefined, port_=undefined){
-                let conn = new ConnectionTeleplotWebsocket();
+                let conn = new ConnectionLasecPlotWebsocket();
                 let addr = address_ || this.newConnectionAddress;
                 let port = port_ || 8080;
                 if(addr.includes(":")) {

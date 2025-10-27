@@ -1,9 +1,9 @@
-const getConfiguredUdpPort = () => (window._teleplot_config && Number(window._teleplot_config.udpPort)) || 47269;
-class ConnectionTeleplotVSCode extends Connection{
+const getConfiguredUdpPort = () => (window._lasecplot_config && Number(window._lasecplot_config.udpPort)) || 47269;
+class ConnectionLasecPlotVSCode extends Connection{
     constructor() {
         super();
         this.name="localhost-VSCode"
-        this.type = "teleplot-vscode";
+        this.type = "lasecplot-vscode";
         this.vscode = vscode;
         this.udp = new DataInputUDP(this, "UDP");
         this.udp.address = "localhost";
@@ -77,8 +77,8 @@ class ConnectionTeleplotVSCode extends Connection{
 // GPT_PATCH: listen for config from extension to update ports live
 window.addEventListener('message', (event) => {
   const msg = event.data || {};
-  if (msg.type === 'teleplot-config') {
-    window._teleplot_config = { udpPort: msg.udpPort, cmdUdpPort: msg.cmdUdpPort };
+  if (msg.type === 'lasecplot-config') {
+    window._lasecplot_config = { udpPort: msg.udpPort, cmdUdpPort: msg.cmdUdpPort };
     try {
       if (window.app && Array.isArray(app.connections)) {
         app.connections.forEach(conn => {

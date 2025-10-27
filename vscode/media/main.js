@@ -10,12 +10,12 @@ setInterval(updateView, 1000 / widgetFPS);
 
 
 if(vscode){
-    let conn = new ConnectionTeleplotVSCode();
+    let conn = new ConnectionLasecPlotVSCode();
     conn.connect();
     app.connections.push(conn);
 }
 else {
-    let conn = new ConnectionTeleplotWebsocket();
+    let conn = new ConnectionLasecPlotWebsocket();
     let addr = window.location.hostname;
     let port = window.location.port;
     conn.connect(addr, port);

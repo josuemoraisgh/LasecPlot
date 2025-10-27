@@ -12,14 +12,14 @@
 		<link rel="stylesheet" href="./style-dark.css">
 		<script src="./lib/vue.js"></script>
 		<script>
-			var _teleplot_default_color_style = "light";
+			var _lasecplot_default_color_style = "light";
 		</script>
 
 		<!-- === NOVO: recebe portas do backend e aplica no Vue === -->
 		<script>
 		(function () {
 			// valor padrão; será substituído quando o extension.ts enviar {type:'ports', udp, cmd}
-			window.__teleplotPorts = { udp: 47269, cmd: 47268 };
+			window.__lasecplotPorts = { udp: 47269, cmd: 47268 };
 
 			function applyPortsToVue() {
 				var app = window.app || window.vueApp || window.$app; // tente diferentes nomes comuns
@@ -29,7 +29,7 @@
 						(conn && conn.inputs ? conn.inputs : []).forEach(function (input) {
 							if (input && input.type === 'UDP') {
 								if (!input.address) input.address = 'localhost';
-								input.port = window.__teleplotPorts.udp; // ATUALIZA A PORTA EXIBIDA
+								input.port = window.__lasecplotPorts.udp; // ATUALIZA A PORTA EXIBIDA
 							}
 						});
 					});
@@ -43,7 +43,7 @@
 			window.addEventListener('message', function (event) {
 				var msg = event.data || {};
 				if (msg.type === 'ports') {
-					window.__teleplotPorts = { udp: msg.udp, cmd: msg.cmd };
+					window.__lasecplotPorts = { udp: msg.udp, cmd: msg.cmd };
 					// tenta aplicar já, e re-tenta por ~5s para o caso do Vue ainda não estar pronto
 					var tries = 0;
 					var t = setInterval(function () {
@@ -64,7 +64,7 @@
 						<div v-for="conn in connections" class="connection">
 							<div class="connection-header">
 								<span class="connection-name">{{conn.name}}</span>
-								<span v-if="conn.type!='teleplot-vscode'" @click="removeConnection(conn)" style="cursor: pointer;font-size: 8px;" title="Remove connection">╳</span>
+								<span v-if="conn.type!='lasecplot-vscode'" @click="removeConnection(conn)" style="cursor: pointer;font-size: 8px;" title="Remove connection">╳</span>
 								<div class="connection-button-container">
 									<span v-if="conn.supportSerial" class="connection-button" @click="conn.createInput('serial')" >🞢 New Serial</span>
 								</div>
@@ -119,7 +119,7 @@
 						<div class="connection-new-container">
 							<button v-if="!creatingConnection" @click="creatingConnection=true" class="connection-new-plus-button" title="Add a new connection">🞢</button>
 							<div v-if="creatingConnection">
-								<input v-on:keyup.enter="createConnection()" type="text" placeholder="IP of teleplot server" v-model="newConnectionAddress" title="IP on which teleplot should try to connect"/>
+								<input v-on:keyup.enter="createConnection()" type="text" placeholder="IP of lasecplot server" v-model="newConnectionAddress" title="IP on which lasecplot should try to connect"/>
 								<button @click="createConnection()" title="Connect to new telepot server">Connect</button>
 								<button @click="creatingConnection=false" title="Cancel new connection">Cancel</button>
 							<div>
@@ -210,8 +210,8 @@
 	<script src="./components/3dComponent/3dComponent.js"></script>
 	<script src="./constants.js"></script>
 	<script src="./classes/communication/connection/Connection.js"></script>
-	<script src="./classes/communication/connection/ConnectionTeleplotVSCode.js"></script>
-	<script src="./classes/communication/connection/ConnectionTeleplotWebsocket.js"></script>
+	<script src="./classes/communication/connection/ConnectionLasecPlotVSCode.js"></script>
+	<script src="./classes/communication/connection/ConnectionLasecPlotWebsocket.js"></script>
 	<script src="./utils/view/cursor.js"></script>
 	<script src="./classes/communication/serverMessageReading.js"></script>
 	<script src="./classes/view/widgets/DataWidget.js"></script>

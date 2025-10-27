@@ -18,7 +18,7 @@ function saveFile(content, filename) {
 
 function buildFileName(fileContentType, fileExtension)
 {
-    let fileName = "teleplot_";
+    let fileName = "lasecplot_";
 
     if (fileContentType === "layout")
         fileName += "layout_";

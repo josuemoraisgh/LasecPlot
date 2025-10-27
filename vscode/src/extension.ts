@@ -19,7 +19,7 @@ let udpPort = 47269;     // telemetria (default)
 let cmdUdpPort = 47268;  // comandos (default)
 
 function loadPortsFromSettings() {
-  const cfg = vscode.workspace.getConfiguration('teleplot');
+  const cfg = vscode.workspace.getConfiguration('lasecplot');
   udpPort = cfg.get<number>('udpPort', 47269);
   cmdUdpPort = cfg.get<number>('cmdUdpPort', 47268);
 }
@@ -51,7 +51,7 @@ function startUdpServer() {
   udpServer = s;
 }
 
-function startTeleplotServer() {
+function startLasecPlotServer() {
   loadPortsFromSettings();
   startUdpServer();
   // Se já existe painel, informe as portas ativas ao front
@@ -65,8 +65,8 @@ export function activate(context: vscode.ExtensionContext) {
   loadPortsFromSettings();
 
   context.subscriptions.push(
-    vscode.commands.registerCommand('teleplot.start', () => {
-      startTeleplotServer();
+    vscode.commands.registerCommand('lasecplot.start', () => {
+      startLasecPlotServer();
 
       const column = vscode.window.activeTextEditor ? vscode.window.activeTextEditor.viewColumn : undefined;
 
@@ -79,8 +79,8 @@ export function activate(context: vscode.ExtensionContext) {
 
       // Cria o painel novo.
       const panel = vscode.window.createWebviewPanel(
-        'teleplot',
-        'Teleplot',
+        'lasecplot',
+        'LasecPlot',
         column || vscode.ViewColumn.One,
         {
           enableScripts: true,
@@ -109,9 +109,9 @@ export function activate(context: vscode.ExtensionContext) {
         });
 
         // Força tema padrão "dark" se houver marcador
-        const teleplotStyle = rawHTML.match(/(.*)_teleplot_default_color_style(.*)/g);
-        if (teleplotStyle != null) {
-          rawHTML = rawHTML.replace(teleplotStyle.toString(), 'var _teleplot_default_color_style = "dark";');
+        const lasecplotStyle = rawHTML.match(/(.*)_lasecplot_default_color_style(.*)/g);
+        if (lasecplotStyle != null) {
+          rawHTML = rawHTML.replace(lasecplotStyle.toString(), 'var _lasecplot_default_color_style = "dark";');
         }
 
         panel.webview.html = rawHTML;
@@ -150,16 +150,16 @@ export function activate(context: vscode.ExtensionContext) {
 
   // Status bar
   statusBarIcon = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
-  statusBarIcon.command = 'teleplot.start';
-  statusBarIcon.text = '$(graph-line) Teleplot';
+  statusBarIcon.command = 'lasecplot.start';
+  statusBarIcon.text = '$(graph-line) LasecPlot';
   context.subscriptions.push(statusBarIcon);
   statusBarIcon.show();
 
   // Reagir a mudanças nas configurações (reinicia server e passa a usar nova porta)
   const disp = vscode.workspace.onDidChangeConfiguration(e => {
-    if (e.affectsConfiguration('teleplot.udpPort') || e.affectsConfiguration('teleplot.cmdUdpPort')) {
-      console.log('[Teleplot] Config alterada — reiniciando sockets com novas portas.');
-      startTeleplotServer();
+    if (e.affectsConfiguration('lasecplot.udpPort') || e.affectsConfiguration('lasecplot.cmdUdpPort')) {
+      console.log('[LasecPlot] Config alterada — reiniciando sockets com novas portas.');
+      startLasecPlotServer();
       currentPanel?.webview.postMessage({ type: 'ports', udp: udpPort, cmd: cmdUdpPort });
     }
   });
