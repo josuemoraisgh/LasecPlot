@@ -27,6 +27,8 @@ jobs:
     env:
       EXT_DIR: vscode
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # Evita build nativa desnecessária quando houver prebuild disponível
+      npm_config_build_from_source: "false"
 
     steps:
       - name: Checkout
@@ -35,14 +37,21 @@ jobs:
           fetch-depth: 0
           persist-credentials: true
 
-      - name: Configurar Node.js
+      - name: Configurar Node.js (use 18 para addon nativo)
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "18"
           cache: "npm"
           cache-dependency-path: |
             ${{ env.EXT_DIR }}/package-lock.json
             ${{ env.EXT_DIR }}/package.json
+
+      - name: Instalar dependências de sistema (libudev para usb-detection)
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y --no-install-recommends \
+            build-essential python3 make g++ \
+            libudev-dev
 
       - name: Verificações mínimas
         shell: bash
@@ -97,20 +106,28 @@ jobs:
             echo "::warning::'engines.vscode' não definido; defina um range suportado (ex.: ^1.84.0)."
           fi
 
-      - name: Instalar dependências (ci ou install)
+      - name: Instalar dependências (tenta omitir opcionais primeiro)
         shell: bash
         working-directory: ${{ env.EXT_DIR }}
         run: |
           set -euxo pipefail
-          # evita prompts/telemetria/auditoria em CI
           npm config set fund false
           npm config set audit false
+
+          # 1) Com lockfile
           if [ -f package-lock.json ] || [ -f npm-shrinkwrap.json ]; then
-            echo "Lockfile detectado => npm ci"
-            npm ci
+            echo "Lockfile detectado."
+            # Tenta sem opcionais (evita addons problemáticos se forem opcionais)
+            if ! npm ci --omit=optional; then
+              echo "::warning::npm ci --omit=optional falhou; tentando npm ci padrão."
+              npm ci
+            fi
           else
-            echo "Sem lockfile => npm install (gerando package-lock.json)"
-            npm install --no-audit --no-fund
+            echo "Sem lockfile."
+            if ! npm install --no-audit --no-fund --omit=optional; then
+              echo "::warning::npm install --omit=optional falhou; tentando npm install padrão."
+              npm install --no-audit --no-fund
+            fi
           fi
 
       - name: Build (se existir script)
