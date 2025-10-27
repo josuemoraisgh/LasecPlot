@@ -1,3 +1,4 @@
+const getConfiguredUdpPort = () => (window._teleplot_config && Number(window._teleplot_config.udpPort)) || 47269;
 class ConnectionTeleplotVSCode extends Connection{
     constructor() {
         super();
@@ -72,3 +73,24 @@ class ConnectionTeleplotVSCode extends Connection{
         }
     }
 }
+
+// GPT_PATCH: listen for config from extension to update ports live
+window.addEventListener('message', (event) => {
+  const msg = event.data || {};
+  if (msg.type === 'teleplot-config') {
+    window._teleplot_config = { udpPort: msg.udpPort, cmdUdpPort: msg.cmdUdpPort };
+    try {
+      if (window.app && Array.isArray(app.connections)) {
+        app.connections.forEach(conn => {
+          if (conn && Array.isArray(conn.inputs)) {
+            conn.inputs.forEach(inp => {
+              if (inp && inp.type === 'UDP') {
+                inp.port = Number(msg.udpPort);
+              }
+            });
+          }
+        });
+      }
+    } catch(e) {}
+  }
+});

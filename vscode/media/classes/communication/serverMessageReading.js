@@ -69,8 +69,17 @@ function isTextFormatTelemetry(msg)
 
 // msg : a String containing data of a variable, ex : "myValue:1627551892437:1234|g"
 // now : a Number representing a timestamp 
-function parseVariablesData(msg, now){
-    // --- SUPORTE UDP estilo "serial": nome>timestamp:valor§unidade|g ---
+\1
+    /* GPT_PATCH_PARSE_UDP_SER_START */
+    try {
+        const firstColon = msg.indexOf(':');
+        const gt = msg.indexOf('>');
+        if (gt !== -1 && (firstColon === -1 || gt < firstColon)) {
+            msg = msg.slice(0, gt) + ':' + msg.slice(gt + 1);
+        }
+    } catch (e) { /* no-op */ }
+    /* GPT_PATCH_PARSE_UDP_SER_END */
+// --- SUPORTE UDP estilo "serial": nome>timestamp:valor§unidade|g ---
     const firstColon = msg.indexOf(':');
     const gt = msg.indexOf('>');
     if (gt !== -1 && (firstColon === -1 || gt < firstColon)) {
