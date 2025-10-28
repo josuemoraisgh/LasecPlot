@@ -1,68 +1,62 @@
 {
-  "name": "lasecplot",
-  "displayName": "LasecPlot",
-  "description": "Teleplot UDP connector + command panel for LasecPlot",
-  "version": "0.1.1",
-  "publisher": "josuemoraisgh",
+	"name": "lasecplot",
+	"description": "LasecPlot - Ridiculously-simple telemetry viewer.",
+	"version": "1.1.3",
+	"publisher": "alexnesnes",
+	"private": true,
+	"license": "MIT",
 	"repository": {
 		"type": "git",
-		"url": "https://github.com/josuemoraisgh/LasecPlot"
-	},  
-  "engines": {
-    "vscode": "^1.85.0"
-  },
-  "categories": [
-    "Other"
-  ],
-  "activationEvents": [
-    "onStartupFinished",
-    "onView:lasecplot.teleplotSidebar"
-  ],
-  "main": "./dist/extension.js",
-  "contributes": {
-    "configuration": {
-      "title": "LasecPlot",
-      "properties": {
-        "lasecplot.udpPort": {
-          "type": "number",
-          "default": 47269,
-          "description": "Porta UDP de escuta (listener) para dados Teleplot."
-        },
-        "lasecplot.cmdUdpPort": {
-          "type": "number",
-          "default": 47268,
-          "description": "Porta UDP de comando (envio) para o servidor Teleplot."
-        }
-      }
-    },
-    "viewsContainers": {
-      "activitybar": [
-        {
-          "id": "lasecplot",
-          "title": "LasecPlot",
-          "icon": "media/lasecplot.svg"
-        }
-      ]
-    },
-    "views": {
-      "lasecplot": [
-        {
-          "id": "lasecplot.teleplotSidebar",
-          "name": "Teleplot UDP"
-        }
-      ]
-    }
-  },
-  "scripts": {
-    "vscode:prepublish": "npm run compile",
-    "compile": "tsc -p ./",
-    "watch": "tsc -watch -p ./",
-    "package": "vsce package"
-  },
-  "devDependencies": {
-    "@types/node": "^18.19.0",
-    "@types/vscode": "^1.85.0",
-    "typescript": "^5.6.3",
-    "vsce": "^2.15.0"
-  }
+		"url": "https://github.com/nesnes/lasecplot"
+	},
+	"engines": {
+		"vscode": "^1.47.0"
+	},
+	"categories": [
+		"Other"
+	],
+	"activationEvents": [
+		"onStartupFinished",
+		"onCommand:lasecplot.start",
+		"onWebviewPanel:lasecplot"
+	],
+	"main": "./out/extension.js",
+	"icon": "images/logo-color.png",
+	"contributes": {
+		"commands": [
+			{
+				"command": "lasecplot.start",
+				"title": "Start lasecplot session",
+				"category": "lasecplot",
+				"icon": {
+					"light": "images/logo-color.svg",
+					"dark": "images/logo-color.svg"
+				}
+			}
+		]
+	},
+	"scripts": {
+		"vscode:prepublish": "echo Dont forget to run extension first so source files are updated by pre_launch task && npm run compile",
+		"compile": "tsc -p ./",
+		"rebuild:native-modules": "node ./node_modules/electron-rebuild/lib/cli.js --version 1.4.13",
+		"lint": "eslint . --ext .ts,.tsx",
+		"watch": "tsc -w -p ./"
+	},
+	"dependencies": {
+		"dgram": "^1.0.1",
+		"node-usb-native": "^0.0.20",
+		"serialport": "^10.4.0",
+		"vsce": "^2.9.2"
+	},
+	"devDependencies": {
+		"@types/node": "^12.12.0",
+		"@types/vscode": "^1.47.0",
+		"@types/vscode-webview": "^1.57.0",
+		"@typescript-eslint/eslint-plugin": "^4.16.0",
+		"@typescript-eslint/parser": "^4.16.0",
+		"electron-prebuilt": "1.4.13",
+		"electron-rebuild": "^3.2.3",
+		"eslint": "^7.21.0",
+		"typescript": "^4.4.3"
+	}
 }
