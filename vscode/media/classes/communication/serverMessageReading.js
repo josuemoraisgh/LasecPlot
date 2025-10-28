@@ -5,11 +5,6 @@ function parseData(msgIn){
     if(app.isViewPaused) return; // Do not buffer incomming data while paused
     let now = new Date().getTime();
 
-    // Unifica a origem: tratar UDP exatamente como serial
-    // Considera:
-    //  - msgIn.fromSerial (já existente)
-    //  - msgIn.fromUDP (se o produtor setar isso)
-    //  - msgIn.input.type == 'serial' OU 'udp' (case-insensitive)
     const typeStr = (msgIn.input && msgIn.input.type) ? String(msgIn.input.type).toLowerCase() : "";
     const fromDevice =
         !!msgIn.fromSerial ||
@@ -17,21 +12,16 @@ function parseData(msgIn){
         typeStr === "serial" ||
         typeStr === "udp";
 
-    // Se vier timestamp do produtor (extensão/servidor), usar igual fazemos com serial
     if(fromDevice && typeof msgIn.timestamp === "number" && isFinite(msgIn.timestamp)){
         now = msgIn.timestamp;
     }
 
     now/=1000; // we convert timestamp in seconds for uPlot to work
 
-    // parse msg
     let msgList = (""+msgIn.data).split("\n");
 
     for(let msg of msgList){
         try{
-            // Lógica invertida aplicada para "serial" e "udp" igualmente
-            // - Se começa com '>' => tratar como variável (remover '>')
-            // - Caso contrário => prefixar '>:' para tratar como log
             if(fromDevice && msg.startsWith(">")) {
                 msg = msg.substring(1); // variable
             }
@@ -39,16 +29,12 @@ function parseData(msgIn){
                 msg = ">:"+msg; // log
             }
 
-            // Command
             if(msg.startsWith("|"))
                 parseCommandList(msg);
-            // Log
             else if(msg.startsWith(">"))
                 parseLog(msg, now);
-            // 3D
             else if (msg.substring(0,3) == "3D|")
                 parse3D(msg, now);
-            // Data
             else
                 parseVariablesData(msg, now);
         }

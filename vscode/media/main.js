@@ -2,7 +2,7 @@
 // - input.address / input.port mostram IP/porta LOCAIS (udpAddress/udpPort)
 // - newConnectionAddress é o IP:PORTA REMOTO (remoteAddress/cmdUdpPort)
 // - Handshake UDP: envia "CONNECT:<IP_LOCAL>:<UDP_PORT>" para REMOTO:CMD_UDP_PORT
-//   e aguarda "OK:<IP_REMOTO>:<CMD_UDP_PORT>" para marcar connected.
+//   e aguarda ">CONNECTED:<IP_REMOTO>:<CMD_UDP_PORT>" para marcar connected.
 
 var vscode = null;
 if ("acquireVsCodeApi" in window) vscode = acquireVsCodeApi();
@@ -228,8 +228,8 @@ window.addEventListener('message', (event) => {
     const lines = msg.data.split(/\r?\n/);
     for (const line of lines) {
       if (!line) continue;
-      if (line.startsWith('OK:')) {
-        // Formato esperado: OK:<IP_REMOTO>:<CMD_UDP_PORT>
+      if (line.startsWith('>CONNECTED:')) {
+        // Formato esperado: >CONNECTED:<IP_REMOTO>:<CMD_UDP_PORT>
         const parts = line.split(':');
         const okIP = parts[1] || '';
         const okPort = Number(parts[2] || NaN);
