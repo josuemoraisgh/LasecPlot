@@ -33,7 +33,32 @@
 					"dark": "images/logo-color.svg"
 				}
 			}
-		]
+		],
+		"configuration": {
+			"title": "LasecPlot",
+			"properties": {
+				"lasecplot.udpAddress": {
+					"type": "string",
+					"default": "127.0.0.1",
+					"description": "IP local (LP) para entrada de dados."
+				},
+				"lasecplot.udpPort": {
+					"type": "number",
+					"default": 47269,
+					"description": "Porta UDP local (LP) para dados."
+				},
+				"lasecplot.remoteAddress": {
+					"type": "string",
+					"default": "127.0.0.1",
+					"description": "IP remoto para comandos (destino CMD)."
+				},
+				"lasecplot.cmdUdpPort": {
+					"type": "number",
+					"default": 47268,
+					"description": "Porta UDP remota para comandos (CMD)."
+				}
+			}
+		}
 	},
 	"scripts": {
 		"vscode:prepublish": "echo Dont forget to run extension first so source files are updated by pre_launch task && npm run compile",

@@ -1,24 +1,44 @@
-//parses the message we received from the server
+// parses the message we received from the server
 
 function parseData(msgIn){
 
     if(app.isViewPaused) return; // Do not buffer incomming data while paused
     let now = new Date().getTime();
 
+    // Unifica a origem: tratar UDP exatamente como serial
+    // Considera:
+    //  - msgIn.fromSerial (já existente)
+    //  - msgIn.fromUDP (se o produtor setar isso)
+    //  - msgIn.input.type == 'serial' OU 'udp' (case-insensitive)
+    const typeStr = (msgIn.input && msgIn.input.type) ? String(msgIn.input.type).toLowerCase() : "";
+    const fromDevice =
+        !!msgIn.fromSerial ||
+        !!msgIn.fromUDP ||
+        typeStr === "serial" ||
+        typeStr === "udp";
 
-    let fromSerial = msgIn.fromSerial || (msgIn.input && msgIn.input.type=="serial");
-    if(fromSerial) now = msgIn.timestamp;
+    // Se vier timestamp do produtor (extensão/servidor), usar igual fazemos com serial
+    if(fromDevice && typeof msgIn.timestamp === "number" && isFinite(msgIn.timestamp)){
+        now = msgIn.timestamp;
+    }
 
     now/=1000; // we convert timestamp in seconds for uPlot to work
-    //parse msg
+
+    // parse msg
     let msgList = (""+msgIn.data).split("\n");
 
     for(let msg of msgList){
         try{
-            // Inverted logic on serial port for usability
-            if(fromSerial && msg.startsWith(">")) msg = msg.substring(1);// remove '>' to consider as variable
-            else if(fromSerial && !msg.startsWith(">")) msg = ">:"+msg;// add '>' to consider as log
-            
+            // Lógica invertida aplicada para "serial" e "udp" igualmente
+            // - Se começa com '>' => tratar como variável (remover '>')
+            // - Caso contrário => prefixar '>:' para tratar como log
+            if(fromDevice && msg.startsWith(">")) {
+                msg = msg.substring(1); // variable
+            }
+            else if(fromDevice && !msg.startsWith(">")) {
+                msg = ">:"+msg; // log
+            }
+
             // Command
             if(msg.startsWith("|"))
                 parseCommandList(msg);
