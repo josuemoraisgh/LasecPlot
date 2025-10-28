@@ -8,17 +8,15 @@ type Target = { ip: string, port: number } | null;
 export function activate(context: vscode.ExtensionContext) {
   const output = vscode.window.createOutputChannel('LasecPlot UDP');
   const status = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
-  status.text = `LasecPlot: UDP Not connected`;
-  status.tooltip = 'Clique para abrir o painel Teleplot';
+  status.text = '$(broadcast) Teleplot';
+  status.tooltip = 'Teleplot — clique para abrir o painel';
   status.command = 'lasecplot.openSidebar';
   status.show();
   context.subscriptions.push(status);
 
-  // Settings
   const getUdpPort = () => vscode.workspace.getConfiguration('lasecplot').get<number>('udpPort', 47269);
   const getCmdPort = () => vscode.workspace.getConfiguration('lasecplot').get<number>('cmdUdpPort', 47268);
 
-  // Sockets
   let listenSocket: dgram.Socket | null = null;
   let sendSocket: dgram.Socket | null = null;
   let target: Target = null;
@@ -28,10 +26,11 @@ export function activate(context: vscode.ExtensionContext) {
   function setTarget(t: Target){
     target = t;
     context.globalState.update('lastTarget', t ? `${t.ip}:${t.port}` : '');
-    updateStatus(false);
+    updateStatus(!!t);
   }
   function updateStatus(connected: boolean){
-    status.text = connected && target ? `LasecPlot UDP: ${target.ip}:${target.port}` : 'LasecPlot: UDP Not connected';
+    status.text = '$(broadcast) Teleplot';
+    status.tooltip = connected && target ? `Conectado a ${target.ip}:${target.port} — clique para abrir` : 'Desconectado — clique para abrir';
     if(panelView){
       panelView.webview.postMessage({type:'status', connected, target: target ? `${target.ip}:${target.port}` : ''});
     }
@@ -45,27 +44,18 @@ export function activate(context: vscode.ExtensionContext) {
     const port = getUdpPort();
     if(!listenSocket){
       listenSocket = dgram.createSocket('udp4');
-      listenSocket.on('error', (err)=>{
-        output.appendLine(`[listen:error] ${err.message}`);
-      });
+      listenSocket.on('error', (err)=>output.appendLine(`[listen:error] ${err.message}`));
       listenSocket.on('message', (msg, rinfo)=>{
-        // filter by target ip and configured udpPort
         if(target && rinfo.address === target.ip && rinfo.port === getUdpPort()){
           const text = msg.toString('utf8');
           output.appendLine(`[udp ${rinfo.address}:${rinfo.port}] ${text.trim()}`);
           panelView?.webview.postMessage({type:'udpData', text});
           panelView?.webview.postMessage({type:'log', text});
-          // TODO: despachar para parser de gráfico, se existir
-        } else {
-          // Ignora mensagens que não são do alvo esperado
         }
       });
-      listenSocket.bind(port, ()=>{
-        output.appendLine(`[listen] Bind UDP ${port}`);
-      });
+      listenSocket.bind(port, ()=>output.appendLine(`[listen] Bind UDP ${port}`));
       context.subscriptions.push({dispose: ()=>listenSocket?.close()});
     } else {
-      // rebind if port changed
       const addr = listenSocket.address();
       if(typeof addr === 'object' && addr.port !== port){
         try { listenSocket.close(); } catch {}
@@ -76,7 +66,6 @@ export function activate(context: vscode.ExtensionContext) {
   }
   ensureSockets();
 
-  // Sidebar View
   let panelView: vscode.WebviewView | null = null;
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider('lasecplot.teleplotSidebar', {
@@ -105,7 +94,6 @@ export function activate(context: vscode.ExtensionContext) {
               }
               setTarget({ip, port});
               ensureSockets();
-              // send CONNECT <clientId>\n
               try {
                 const payload = Buffer.from(`CONNECT ${clientId}\n`, 'utf8');
                 sendSocket!.send(payload, port, ip);
@@ -142,8 +130,10 @@ export function activate(context: vscode.ExtensionContext) {
   );
 
   context.subscriptions.push(
-    vscode.commands.registerCommand('lasecplot.openSidebar', ()=>{
-      vscode.commands.executeCommand('workbench.view.extension.lasecplot');
+    vscode.commands.registerCommand('lasecplot.openSidebar', async ()=>{
+      await vscode.commands.executeCommand('workbench.view.extension.lasecplot');
+      await vscode.commands.executeCommand('lasecplot.teleplotSidebar.focus');
+      setTimeout(()=>{ panelView?.show?.(true); }, 50);
     })
   );
 
@@ -156,7 +146,7 @@ export function activate(context: vscode.ExtensionContext) {
 
 function getWebviewHtml(webview: vscode.Webview, context: vscode.ExtensionContext, nonce: string){
   const tpl = require('fs').readFileSync(context.asAbsolutePath('media/teleplot.html'), 'utf8');
-  return tpl.replace('{{nonce}}', nonce);
+  return tpl.replace(/\{\{nonce\}\}/g, nonce);
 }
 
 export function deactivate(){}

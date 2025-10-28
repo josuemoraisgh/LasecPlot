@@ -13,7 +13,7 @@ body { font-family: var(--vscode-font-family); padding: 8px; }
 .badge.ok { background: #2ea043; color:white; }
 .badge.err { background: #d73a49; color:white; }
 .log { width:100%; height:180px; }
-small.mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
+small.mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace; }
 hr{ margin:8px 0; }
 </style>
 <script nonce="{{nonce}}" src="serverMessageReading.shim.js"></script>
@@ -48,17 +48,13 @@ const status = document.getElementById('status');
 const log = document.getElementById('log');
 const target = document.getElementById('target');
 
-btnConn.addEventListener('click', ()=>{
-  vscode.postMessage({type:'connect', ip: ip.value});
-});
-btnCancel.addEventListener('click', ()=>{
-  vscode.postMessage({type:'cancel'});
-});
+btnConn.addEventListener('click', ()=>{ vscode.postMessage({type:'connect', ip: ip.value}); });
+btnCancel.addEventListener('click', ()=>{ vscode.postMessage({type:'cancel'}); });
 btnSend.addEventListener('click', ()=>{
   vscode.postMessage({type:'send', text: cmd.value});
-  cmd.value = '';
-  cmd.focus();
+  cmd.value = ''; cmd.focus();
 });
+
 window.addEventListener('message', event => {
   const m = event.data;
   if(m.type==='status'){
@@ -66,19 +62,14 @@ window.addEventListener('message', event => {
     status.className = 'badge ' + (m.connected ? 'ok' : 'err');
     target.textContent = m.target || '';
   }
-
   if(m.type==='udpData'){
-    // 1) If the project already defines a parser like serverMessageReading.js,
-    // try to call it so the behavior matches the Serial flow.
     try {
       if (window.ServerMessageReading && typeof window.ServerMessageReading.parse === 'function') {
         window.ServerMessageReading.parse(m.text);
       } else if (typeof window.handleServerDatagram === 'function') {
         window.handleServerDatagram(m.text);
       }
-    } catch(e) {
-      // fall through to log
-    }
+    } catch(e) {}
   }
   if(m.type==='log'){
     log.value += m.text + '\n';
