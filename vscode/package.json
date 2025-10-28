@@ -3,7 +3,11 @@
   "displayName": "LasecPlot",
   "description": "Teleplot UDP connector + command panel for LasecPlot",
   "version": "0.1.1",
-  "publisher": "your-publisher",
+  "publisher": "josuemoraisgh",
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/josuemoraisgh/LasecPlot"
+	},  
   "engines": {
     "vscode": "^1.85.0"
   },
