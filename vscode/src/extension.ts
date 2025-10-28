@@ -42,7 +42,11 @@ function bindUdpServer(udpPort: number, cmdUdpPort: number, remoteAddress: strin
   udpServer.bind(udpPort);
   udpServer.on('message', function (msg: any, _info: any) {
     if (currentPanel) {
-      currentPanel.webview.postMessage({ data: msg.toString(), fromUDP: true, timestamp: Date.now() });
+      currentPanel.webview.postMessage({
+        data: msg.toString(),
+        fromUDP: true,
+        timestamp: Date.now()
+      });
     }
   });
   updateStatusBar(udpPort, cmdUdpPort, remoteAddress);
@@ -85,7 +89,9 @@ export function activate(context: vscode.ExtensionContext) {
 
       bindUdpServer(udpPort, cmdUdpPort, remoteAddress);
 
-      const column = vscode.window.activeTextEditor ? vscode.window.activeTextEditor.viewColumn : undefined;
+      const column = vscode.window.activeTextEditor
+        ? vscode.window.activeTextEditor.viewColumn
+        : undefined;
 
       if (currentPanel) {
         currentPanel.reveal(column);
@@ -98,95 +104,133 @@ export function activate(context: vscode.ExtensionContext) {
         column || vscode.ViewColumn.One,
         {
           enableScripts: true,
-          localResourceRoots: [vscode.Uri.file(path.join(context.extensionPath, 'media'))],
+          localResourceRoots: [
+            vscode.Uri.file(path.join(context.extensionPath, 'media'))
+          ],
           retainContextWhenHidden: true,
           enableCommandUris: true,
         }
       );
       currentPanel = panel;
 
-      fs.readFile(path.join(context.extensionPath, 'media', 'index.html'), (err, data) => {
-        if (err) { console.error(err); return; }
-        let rawHTML = data.toString();
+      fs.readFile(
+        path.join(context.extensionPath, 'media', 'index.html'),
+        (err, data) => {
+          if (err) {
+            console.error(err);
+            return;
+          }
+          let rawHTML = data.toString();
 
-        const srcList = rawHTML.match(/src\="(.*?)"/g) || [];
-        const hrefList = rawHTML.match(/href\="(.*?)"/g) || [];
+          // rewrite all src/href to webview URIs
+          const srcList = rawHTML.match(/src\="(.*?)"/g) || [];
+          const hrefList = rawHTML.match(/href\="(.*?)"/g) || [];
 
-        for (let attr of [...srcList, ...hrefList]) {
-          const url = attr.split('"')[1];
-          const extensionURI = vscode.Uri.joinPath(context.extensionUri, "./media/" + url);
-          const webURI = panel.webview.asWebviewUri(extensionURI);
-          const toReplace = attr.replace(url, webURI.toString());
-          rawHTML = rawHTML.replace(attr, toReplace);
+          for (let attr of [...srcList, ...hrefList]) {
+            const url = attr.split('"')[1];
+            const extensionURI = vscode.Uri.joinPath(
+              context.extensionUri,
+              "./media/" + url
+            );
+            const webURI = panel.webview.asWebviewUri(extensionURI);
+            const toReplace = attr.replace(url, webURI.toString());
+            rawHTML = rawHTML.replace(attr, toReplace);
+          }
+
+          // force dark style if needed
+          const lasecplotStyle = rawHTML.match(/(.*)_lasecplot_default_color_style(.*)/g);
+          if (lasecplotStyle != null) {
+            rawHTML = rawHTML.replace(
+              lasecplotStyle.toString(),
+              'var _lasecplot_default_color_style = "dark";'
+            );
+          }
+
+          panel.webview.html = rawHTML;
+
+          panel.webview.postMessage({
+            type: 'initConfig',
+            udpAddress,
+            udpPort,
+            cmdUdpPort,
+            remoteAddress,
+          });
         }
-
-        const lasecplotStyle = rawHTML.match(/(.*)_lasecplot_default_color_style(.*)/g);
-        if (lasecplotStyle != null) {
-          rawHTML = rawHTML.replace(lasecplotStyle.toString(), 'var _lasecplot_default_color_style = "dark";');
-        }
-
-        panel.webview.html = rawHTML;
-
-        panel.webview.postMessage({
-          type: 'initConfig',
-          udpAddress,
-          udpPort,
-          cmdUdpPort,
-          remoteAddress,
-        });
-      });
+      );
 
       panel.onDidDispose(() => {
-        if (udpServer) { try { udpServer.close(); } catch { } }
+        if (udpServer) {
+          try { udpServer.close(); } catch { }
+        }
         udpServer = null;
+
         while (_disposables.length) {
           const x = _disposables.pop();
           if (x) x.dispose();
         }
         _disposables.length = 0;
+
         for (let s in serials) {
           try { serials[s].close(); } catch { }
           serials[s] = null;
         }
+
         currentPanel = null;
       }, null, _disposables);
 
-      panel.webview.onDidReceiveMessage(async (message) => {
-        if (message && message.type === 'saveAddressPort') {
-          const host = String(message.host || '').trim();
-          const portNum = Number(message.port);
-          if (host && Number.isFinite(portNum)) {
-            await saveAddressPort(host, portNum);
+      panel.webview.onDidReceiveMessage(
+        async (message) => {
+          // salvar host/port/config
+          if (message && message.type === 'saveAddressPort') {
+            const host = String(message.host || '').trim();
+            const portNum = Number(message.port);
+            if (host && Number.isFinite(portNum)) {
+              await saveAddressPort(host, portNum);
+            }
+            return;
           }
-          return;
-        }
-        if (message && message.type === 'saveCmdPort') {
-          const portNum = Number(message.port);
-          if (Number.isFinite(portNum)) {
-            await saveCmdPort(portNum);
+          if (message && message.type === 'saveCmdPort') {
+            const portNum = Number(message.port);
+            if (Number.isFinite(portNum)) {
+              await saveCmdPort(portNum);
+            }
+            return;
           }
-          return;
-        }
-        if (message && message.type === 'saveRemoteAddress') {
-          const host = String(message.host || '').trim();
-          if (host) {
-            await saveRemoteAddress(host);
+          if (message && message.type === 'saveRemoteAddress') {
+            const host = String(message.host || '').trim();
+            if (host) {
+              await saveRemoteAddress(host);
+            }
+            return;
           }
-          return;
-        }
-        if ("data" in message) {
-          const { cmdUdpPort: currentCmdPort, remoteAddress: currentRemote } = getConfig();
-          const udpClient = udp.createSocket('udp4');
-          udpClient.send(message.data, 0, message.data.length, currentCmdPort, currentRemote || '127.0.0.1', () => {
-            udpClient.close();
-          });
-          return;
-        }
-        if ("cmd" in message) {
-          runCmd(message);
-          return;
-        }
-      }, null, _disposables);
+
+          // aqui é importante: qualquer mensagem que vier com campo "data"
+          // é enviada via UDP pro cmdUdpPort -> isso é o que a barra vai usar no modo UDP
+          if ("data" in message) {
+            const { cmdUdpPort: currentCmdPort, remoteAddress: currentRemote } = getConfig();
+            const udpClient = udp.createSocket('udp4');
+            udpClient.send(
+              message.data,
+              0,
+              message.data.length,
+              currentCmdPort,
+              currentRemote || '127.0.0.1',
+              () => {
+                udpClient.close();
+              }
+            );
+            return;
+          }
+
+          // comandos diretos (ex: listSerialPorts, connectSerialPort etc)
+          if ("cmd" in message) {
+            runCmd(message);
+            return;
+          }
+        },
+        null,
+        _disposables
+      );
     })
   );
 
@@ -197,6 +241,7 @@ export function activate(context: vscode.ExtensionContext) {
 
 function runCmd(msg: any) {
   let id = ("id" in msg) ? msg.id : "";
+
   if (msg.cmd == "listSerialPorts") {
     SerialPort.list().then((ports: any) => {
       if (currentPanel) {
@@ -204,44 +249,90 @@ function runCmd(msg: any) {
       }
     });
   }
-  else if (msg.cmd == "connectSerialPort") {
-    if (serials[id]) { try { serials[id].close(); } catch { } delete serials[id]; }
-    serials[id] = new SerialPort({ baudRate: msg.baud, path: msg.port }, function (err: any) {
-      if (err) {
-        currentPanel?.webview.postMessage({ id, cmd: "serialPortError", port: msg.port, baud: msg.baud });
-      }
-      else {
-        currentPanel?.webview.postMessage({ id, cmd: "serialPortConnect", port: msg.port, baud: msg.baud });
-      }
-    });
 
-    const parser = serials[id].pipe(new ReadlineParser({
-      delimiter: '\n'
-    }));
-    parser.on('data', function (data: any) {
-      currentPanel?.webview.postMessage({ id, data: data.toString(), fromSerial: true, timestamp: Date.now() });
-    });
-    serials[id].on('close', function (_err: any) {
-      currentPanel?.webview.postMessage({ id, cmd: "serialPortDisconnect" });
-    });
+  else if (msg.cmd == "connectSerialPort") {
+    // fecha antiga se existir
+    if (serials[id]) {
+      try { serials[id].close(); } catch { }
+      delete serials[id];
+    }
+
+    // abre nova
+    serials[id] = new SerialPort(
+      { baudRate: msg.baud, path: msg.port },
+      function (err: any) {
+        if (err) {
+          currentPanel?.webview.postMessage({
+            id,
+            cmd: "serialPortError",
+            port: msg.port,
+            baud: msg.baud
+          });
+        } else {
+          currentPanel?.webview.postMessage({
+            id,
+            cmd: "serialPortConnect",
+            port: msg.port,
+            baud: msg.baud
+          });
+
+          // só configura parser e listeners se abriu OK
+          const parser = serials[id].pipe(
+            new ReadlineParser({
+              // CORREÇÃO AQUI: antes era '' (string vazia)
+              // agora usamos quebra de linha padrão
+              delimiter: '\n'
+            })
+          );
+
+          parser.on('data', function (data: any) {
+            currentPanel?.webview.postMessage({
+              id,
+              data: data.toString(),
+              fromSerial: true,
+              timestamp: Date.now()
+            });
+          });
+
+          serials[id].on('close', function (_err: any) {
+            currentPanel?.webview.postMessage({
+              id,
+              cmd: "serialPortDisconnect"
+            });
+          });
+        }
+      }
+    );
   }
+
   else if (msg.cmd == "sendToSerial") {
+    // escrita manual na serial (botão Send no modo serial)
     serials[id]?.write(msg.text);
   }
+
   else if (msg.cmd == "disconnectSerialPort") {
     try { serials[id]?.close(); } catch { }
     delete serials[id];
   }
+
   else if (msg.cmd == "saveFile") {
     try {
-      exportDataWithConfirmation(path.join(msg.file.name), { JSON: ["json"] }, msg.file.content);
+      exportDataWithConfirmation(
+        path.join(msg.file.name),
+        { JSON: ["json"] },
+        msg.file.content
+      );
     } catch (error: any) {
       void vscode.window.showErrorMessage("Couldn't write file: " + error);
     }
   }
 }
 
-function exportDataWithConfirmation(fileName: string, filters: { [name: string]: string[] }, data: string): void {
+function exportDataWithConfirmation(
+  fileName: string,
+  filters: { [name: string]: string[] },
+  data: string
+): void {
   void vscode.window.showSaveDialog({
     defaultUri: vscode.Uri.file(fileName),
     filters,
@@ -250,7 +341,9 @@ function exportDataWithConfirmation(fileName: string, filters: { [name: string]:
       const value = uri.fsPath;
       fs.writeFile(value, data, (error: any) => {
         if (error) {
-          void vscode.window.showErrorMessage("Could not write to file: " + value + ": " + error.message);
+          void vscode.window.showErrorMessage(
+            "Could not write to file: " + value + ": " + error.message
+          );
         } else {
           void vscode.window.showInformationMessage("Saved " + value);
         }
