@@ -29,7 +29,7 @@ function getConfig() {
 
 function updateStatusBar(udpPort: number, cmdUdpPort: number, remoteAddress: string) {
   if (!statusBarIcon) return;
-  statusBarIcon.text = `$(graph-line) LasecPlot  udp:${udpPort}  cmd:${cmdUdpPort}@${remoteAddress}`;
+  statusBarIcon.text = `$(graph-line) LasecPlot`;
   statusBarIcon.show();
 }
 

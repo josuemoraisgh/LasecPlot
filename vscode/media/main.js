@@ -228,8 +228,8 @@ window.addEventListener('message', (event) => {
     const lines = msg.data.split(/\r?\n/);
     for (const line of lines) {
       if (!line) continue;
-      if (line.startsWith('>CONNECTED:')) {
-        // Formato esperado: >CONNECTED:<IP_REMOTO>:<CMD_UDP_PORT>
+      if (line.startsWith('CONNECTED:')) {
+        // Formato esperado: CONNECTED:<IP_REMOTO>:<CMD_UDP_PORT>
         const parts = line.split(':');
         const okIP = parts[1] || '';
         const okPort = Number(parts[2] || NaN);

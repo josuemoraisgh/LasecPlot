@@ -20,7 +20,7 @@ class UdpSineServer:
     """
     Protocolo:
       Cliente -> Servidor (cmd_port): "CONNECT:<CLIENT_LOCAL_IP>:<CLIENT_UDP_PORT>"
-      Servidor -> Cliente (<CLIENT_LOCAL_IP>, <CLIENT_UDP_PORT>): "OK:<SERVER_IP>:<CMD_PORT>"
+      Servidor -> Cliente (<CLIENT_LOCAL_IP>, <CLIENT_UDP_PORT>): "CONNECTED:<SERVER_IP>:<CMD_PORT>"
       Servidor -> Cliente (<CLIENT_LOCAL_IP>, <CLIENT_UDP_PORT>): "><var>:<ts_ms>:<valor>\n"
     """
     def __init__(self, cmd_port=47268, sine_freq_hz=1.0, send_rate_hz=30.0, amplitude=1.0, var_name="sin", verbose=True):
@@ -79,7 +79,7 @@ class UdpSineServer:
                     continue
 
                 server_ip = get_local_ip(client_ip)
-                ok = f">CONNECTED:{server_ip}:{self.cmd_port}"
+                ok = f"CONNECTED:{server_ip}:{self.cmd_port}"
 
                 # OK vai para a porta de DADOS do cliente
                 try:
