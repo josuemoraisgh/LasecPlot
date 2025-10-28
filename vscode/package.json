@@ -2,12 +2,12 @@
 	"name": "lasecplot",
 	"description": "LasecPlot - Ridiculously-simple telemetry viewer.",
 	"version": "1.1.3",
-	"publisher": "alexnesnes",
+	"publisher": "josuemoraisgh",
 	"private": true,
 	"license": "MIT",
 	"repository": {
 		"type": "git",
-		"url": "https://github.com/nesnes/lasecplot"
+		"url": "https://github.com/josuemoraisgh/LasecPlot"
 	},
 	"engines": {
 		"vscode": "^1.47.0"
