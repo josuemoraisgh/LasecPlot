@@ -59,42 +59,94 @@ jobs:
           test -d "${{ env.EXT_DIR }}"
           test -f "${{ env.EXT_DIR }}/package.json"
 
-      - name: Normalizar versão e atualizar package.json
+      - name: Normalizar versão e validar publisher
         id: ver
         shell: bash
         working-directory: ${{ env.EXT_DIR }}
         run: |
           set -euxo pipefail
           RAW="${{ inputs.version }}"
-          RAW="${RAW//[[:space:]]/}"         # remove espaços
-          SANITIZED="${RAW#[vV]}"            # tira prefixo v/V
-          PR_FLAG="${{ inputs.prerelease }}" # flag vinda do input
+          RAW="${RAW//[[:space:]]/}"
+          SANITIZED="${RAW#[vV]}"
+          PR_FLAG="${{ inputs.prerelease }}"
           BASE="$SANITIZED"
 
-          # Detecta 1.2.3-RC5 / rc05 / Beta7 etc. -> separa base e liga pré-release
           if [[ "$SANITIZED" =~ ^([0-9]+\.[0-9]+\.[0-9]+)-([A-Za-z]+)([0-9]+)$ ]]; then
             BASE="${BASH_REMATCH[1]}"
             PR_FLAG=true
           fi
 
-          echo "SANITIZED_INPUT=$SANITIZED" >> "$GITHUB_ENV"
-          echo "BASE_VERSION=$BASE" >> "$GITHUB_ENV"
-          echo "IS_PRERELEASE=$PR_FLAG" >> "$GITHUB_ENV"
-
+          # version em package.json
           CUR=$(node -p "require('./package.json').version || ''")
           if [ "$CUR" != "$BASE" ]; then
             npm version "$BASE" --no-git-tag-version
           fi
 
-          NAME=$(node -e "console.log(require('./package.json').name)")
-          PUB=$(node -e "console.log(require('./package.json').publisher)")
-          if [ -z "${PUB:-}" ] || [ "$PUB" = "undefined" ]; then
-            echo "::warning ::'publisher' ausente em package.json (necessário para publicar no Marketplace)."
-            PUB="publisher"
+          NAME=$(node -e "console.log(require('./package.json').name || '')")
+          PUB=$(node -e "console.log(require('./package.json').publisher || '')")
+          if [ -z "$PUB" ]; then
+            echo "::error ::O campo 'publisher' está ausente no package.json. Defina o publisher (ex.: 'josuemoraisgh')."
+            exit 1
           fi
-          echo "EXT_NAME=$NAME" >> "$GITHUB_ENV"
-          echo "PUBLISHER=$PUB" >> "$GITHUB_ENV"
+
+          # arquivos básicos exigidos pelo Marketplace
+          test -f README.md || { echo "::warning ::README.md ausente."; }
+          test -f LICENSE || { echo "::warning ::LICENSE ausente."; }
+
+          echo "SANITIZED_INPUT=$SANITIZED"   >> "$GITHUB_ENV"
+          echo "BASE_VERSION=$BASE"           >> "$GITHUB_ENV"
+          echo "IS_PRERELEASE=$PR_FLAG"       >> "$GITHUB_ENV"
+          echo "EXT_NAME=$NAME"               >> "$GITHUB_ENV"
+          echo "PUBLISHER=$PUB"               >> "$GITHUB_ENV"
           echo "VSIX_NAME=${PUB}.${NAME}-${SANITIZED}.vsix" >> "$GITHUB_ENV"
+
+      - name: Criar .vscodeignore (se não existir)
+        shell: bash
+        working-directory: ${{ env.EXT_DIR }}
+        run: |
+          set -euxo pipefail
+          if [ ! -f .vscodeignore ]; then
+            cat > .vscodeignore <<'EOF'
+# Ignorar dev e infra
+.github/**
+.vscode/**
+.git/**
+scripts/**
+test/**
+tests/**
+coverage/**
+node_modules/**
+src/**
+**/*.map
+
+# Artefatos & cache
+*.log
+*.tgz
+dist-*/**
+tmp/**
+.eslintcache
+.prettierignore
+.editorconfig
+tsconfig.json
+webpack.config.js
+rollup.config.js
+vite.config.*.ts
+vite.config.*.js
+pnpm-lock.yaml
+yarn.lock
+
+# Mantenha apenas o que é necessário no pacote:
+# - out/ ou dist/ (código empacotado)
+# - media/ (recursos do webview)
+!out/**
+!dist/**
+!media/**
+!package.json
+!README.md
+!CHANGELOG.md
+!LICENSE
+EOF
+          fi
 
       - name: Instalar dependências
         shell: bash
@@ -140,7 +192,7 @@ jobs:
         working-directory: ${{ env.EXT_DIR }}
         run: |
           set -euxo pipefail
-          # Se "files" inclui CHANGELOG.md mas ele não existe, remova para não quebrar
+          # Se files[] citar CHANGELOG.md inexistente, remove
           if jq -e '.files?|index("CHANGELOG.md")' package.json >/dev/null 2>&1 && [ ! -f CHANGELOG.md ]; then
             echo "::warning::Removendo CHANGELOG.md de files[] para evitar erro do vsce"
             jq 'del(.files[] | select(.=="CHANGELOG.md"))' package.json > package.tmp && mv package.tmp package.json
