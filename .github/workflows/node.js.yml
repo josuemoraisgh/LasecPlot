@@ -70,28 +70,22 @@ jobs:
           SANITIZED="${RAW#[vV]}"
           PR_FLAG="${{ inputs.prerelease }}"
           BASE="$SANITIZED"
-
           if [[ "$SANITIZED" =~ ^([0-9]+\.[0-9]+\.[0-9]+)-([A-Za-z]+)([0-9]+)$ ]]; then
             BASE="${BASH_REMATCH[1]}"
             PR_FLAG=true
           fi
-
-          # version em package.json
           CUR=$(node -p "require('./package.json').version || ''")
           if [ "$CUR" != "$BASE" ]; then
             npm version "$BASE" --no-git-tag-version
           fi
-
           NAME=$(node -e "console.log(require('./package.json').name || '')")
           PUB=$(node -e "console.log(require('./package.json').publisher || '')")
           if [ -z "$PUB" ]; then
             echo "::error ::O campo 'publisher' está ausente no package.json. Defina o publisher (ex.: 'josuemoraisgh')."
             exit 1
           fi
-
-          # arquivos básicos exigidos pelo Marketplace
           test -f README.md || { echo "::warning ::README.md ausente."; }
-          test -f LICENSE || { echo "::warning ::LICENSE ausente."; }
+          test -f LICENSE   || { echo "::warning ::LICENSE ausente."; }
 
           echo "SANITIZED_INPUT=$SANITIZED"   >> "$GITHUB_ENV"
           echo "BASE_VERSION=$BASE"           >> "$GITHUB_ENV"
@@ -100,53 +94,19 @@ jobs:
           echo "PUBLISHER=$PUB"               >> "$GITHUB_ENV"
           echo "VSIX_NAME=${PUB}.${NAME}-${SANITIZED}.vsix" >> "$GITHUB_ENV"
 
-      - name: Criar .vscodeignore (se não existir)
-        shell: bash
+      - name: Garantir package.json.files (pacote enxuto)
         working-directory: ${{ env.EXT_DIR }}
         run: |
-          set -euxo pipefail
-          if [ ! -f .vscodeignore ]; then
-            cat > .vscodeignore <<'EOF'
-# Ignorar dev e infra
-.github/**
-.vscode/**
-.git/**
-scripts/**
-test/**
-tests/**
-coverage/**
-node_modules/**
-src/**
-**/*.map
-
-# Artefatos & cache
-*.log
-*.tgz
-dist-*/**
-tmp/**
-.eslintcache
-.prettierignore
-.editorconfig
-tsconfig.json
-webpack.config.js
-rollup.config.js
-vite.config.*.ts
-vite.config.*.js
-pnpm-lock.yaml
-yarn.lock
-
-# Mantenha apenas o que é necessário no pacote:
-# - out/ ou dist/ (código empacotado)
-# - media/ (recursos do webview)
-!out/**
-!dist/**
-!media/**
-!package.json
-!README.md
-!CHANGELOG.md
-!LICENSE
-EOF
-          fi
+          node - <<'NODE'
+          const fs = require('fs');
+          const pkg = JSON.parse(fs.readFileSync('package.json','utf8'));
+          // Mantenha apenas o necessário no VSIX:
+          const keep = new Set(['out/**','dist/**','media/**','package.json','README.md','CHANGELOG.md','LICENSE']);
+          const files = Array.from(keep);
+          pkg.files = files;
+          fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2));
+          console.log('package.json.files =', files);
+          NODE
 
       - name: Instalar dependências
         shell: bash
@@ -165,7 +125,7 @@ EOF
         shell: bash
         working-directory: ${{ env.EXT_DIR }}
         run: |
-          node <<'NODE'
+          node - <<'NODE'
           const fs = require('fs'); const p='tsconfig.json';
           let j={}; try{ j=JSON.parse(fs.readFileSync(p,'utf8')); }catch{}
           j.compilerOptions=j.compilerOptions||{};
