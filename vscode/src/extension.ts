@@ -243,44 +243,153 @@ function runCmd(msg: any) {
   let id = ("id" in msg) ? msg.id : "";
 
   if (msg.cmd == "listSerialPorts") {
-    SerialPort.list().then((ports: any) => {
-      if (currentPanel) {
-        currentPanel.webview.postMessage({ id, cmd: "serialPortList", list: ports });
+    const { SerialPort } = require('serialport');
+    const { exec } = require('child_process');
+
+    // 1. Primeiro pega as portas que a lib conhece normalmente
+    SerialPort.list().then((ports: any[]) => {
+
+      // Transformar em mapa rápido pra não duplicar depois
+      const byPath: Record<string, any> = {};
+      for (const p of ports) {
+        if (!byPath[p.path]) {
+          byPath[p.path] = {
+            path: p.path,
+            friendlyName: p.friendlyName || p.path,
+            manufacturer: p.manufacturer || '',
+            serialNumber: p.serialNumber || '',
+            pnpId: p.pnpId || '',
+            locationId: p.locationId || '',
+            vendorId: p.vendorId || '',
+            productId: p.productId || ''
+          };
+        }
       }
+
+      // 2. Agora vamos consultar o registro do Windows pra achar TUDO
+      //    (inclui com0com). Se não for Windows, a gente só retorna o que já tem.
+      if (process.platform !== 'win32') {
+        if (currentPanel) {
+          currentPanel.webview.postMessage({
+            id,
+            cmd: "serialPortList",
+            list: Object.values(byPath)
+          });
+        }
+        return;
+      }
+
+      exec(
+        'reg query HKEY_LOCAL_MACHINE\\HARDWARE\\DEVICEMAP\\SERIALCOMM',
+        (error: any, stdout: string, _stderr: string) => {
+          if (!error && stdout) {
+            // Parse da saída do reg query
+            // Formato típico de linha útil:
+            //    \Device\cnca0    REG_SZ    CNCA0
+            //
+            // A porta que nos interessa é a última "coluna" após REG_SZ.
+            const lines = stdout.split(/\r?\n/);
+            for (const line of lines) {
+              // tira espaços extras
+              const clean = line.trim();
+              // pula linha vazia ou cabeçalho
+              if (!clean || clean.startsWith('HKEY_LOCAL_MACHINE')) continue;
+
+              // quebra por espaços múltiplos
+              // exemplo: ["\\Device\\cnca0", "REG_SZ", "CNCA0"]
+              const parts = clean.split(/\s+/);
+              if (parts.length >= 3) {
+                const maybePort = parts[parts.length - 1]; // última coluna
+                // normalmente "COM3", "CNCA0", "CNCB0", etc.
+
+                // Normaliza caminho:
+                // - Se for COMx, deixar "COMx"
+                // - Se for CNCAx/CNCBx, prefixar \\.\ pra abrir depois
+                let normPath = maybePort;
+                if (/^(CNCA|CNCB)\d+$/i.test(maybePort)) {
+                  normPath = `\\\\.\\${maybePort}`;
+                }
+
+                if (!byPath[normPath]) {
+                  byPath[normPath] = {
+                    path: normPath,
+                    friendlyName: `${maybePort}`,
+                    manufacturer: 'unknown/virtual',
+                    serialNumber: '',
+                    pnpId: '',
+                    locationId: '',
+                    vendorId: '',
+                    productId: ''
+                  };
+                }
+              }
+            }
+          }
+
+          // Agora manda a lista final pro webview
+          if (currentPanel) {
+            currentPanel.webview.postMessage({
+              id,
+              cmd: "serialPortList",
+              list: Object.values(byPath)
+            });
+          }
+        }
+      );
     });
   }
 
   else if (msg.cmd == "connectSerialPort") {
     // fecha antiga se existir
+
     if (serials[id]) {
       try { serials[id].close(); } catch { }
       delete serials[id];
     }
 
-    // abre nova
+    // Normalizar porta no Windows:
+    // - Se vier "CNCA0", transforma em "\\\\.\\CNCA0"
+    // - Se vier "CNCB3", idem
+    // - Se já vier algo como "\\.\CNCA0", garante as barras duplas certas
+    let portPath = msg.port;
+    if (process.platform === 'win32') {
+      // remove aspas e espaços
+      portPath = String(portPath).trim().replace(/^"(.*)"$/, '$1');
+
+      // se já começa com \\.\ então ok
+      if (portPath.match(/^\\\\\.\\/) == null) {
+        // se é do tipo CNCAx / CNCBx / COMx sem prefixo, prefixa
+        if (portPath.match(/^(CNCA|CNCB)\d+$/i)) {
+          portPath = `\\\\.\\${portPath}`;
+        } else if (portPath.match(/^COM\d+$/i)) {
+          // COMx: serialport já lida direto com "COM3", então deixa assim
+        } else if (portPath.match(/^\\\\\.\\(CNCA|CNCB)\d+$/i)) {
+          // já está bom
+        }
+      }
+    }
+
     serials[id] = new SerialPort(
-      { baudRate: msg.baud, path: msg.port },
+      { baudRate: msg.baud, path: portPath },
       function (err: any) {
         if (err) {
           currentPanel?.webview.postMessage({
             id,
             cmd: "serialPortError",
-            port: msg.port,
-            baud: msg.baud
+            port: portPath,
+            baud: msg.baud,
+            error: err.message
           });
         } else {
           currentPanel?.webview.postMessage({
             id,
             cmd: "serialPortConnect",
-            port: msg.port,
+            port: portPath,
             baud: msg.baud
           });
 
-          // só configura parser e listeners se abriu OK
           const parser = serials[id].pipe(
             new ReadlineParser({
-              // CORREÇÃO AQUI: antes era '' (string vazia)
-              // agora usamos quebra de linha padrão
               delimiter: '\n'
             })
           );

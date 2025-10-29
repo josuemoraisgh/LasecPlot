@@ -1,4 +1,4 @@
-class DataInputSerial extends DataInput{
+class DataInputSerial extends DataInput {
     constructor(_connection, _name) {
         super(_connection, _name);
         this.port = null;
@@ -10,57 +10,52 @@ class DataInputSerial extends DataInput{
         this.endlineToSend = "";
     }
 
-    connect(){
+    connect() {
         let baud = parseInt(this.baudrate);
-        this.connection.sendServerCommand({ id: this.id, cmd: "connectSerialPort", port: this.port, baud: baud})
+        this.connection.sendServerCommand({ id: this.id, cmd: "connectSerialPort", port: this.port, baud: baud })
     }
 
-    disconnect(){
-        this.connection.sendServerCommand({ id: this.id, cmd: "disconnectSerialPort"})
+    disconnect() {
+        this.connection.sendServerCommand({ id: this.id, cmd: "disconnectSerialPort" })
     }
 
-    onMessage(msg){
-        if("data" in msg) {
+    onMessage(msg) {
+        if ("data" in msg) {
             msg.input = this;
             parseData(msg);
         }
-        else if("cmd" in msg) {
-            if(msg.cmd == "serialPortList"){
+        else if ("cmd" in msg) {
+            if (msg.cmd == "serialPortList") {
                 this.portList.length = 0;
-                for(let serial of msg.list){
-                    if( serial.locationId
-                     || serial.serialNumber
-                     || serial.pnpId
-                     || serial.vendorId
-                     || serial.productId ){
-                        this.portList.push(serial);
-                    }
+                for (let serial of msg.list) {
+                    // Aceita tudo, inclusive portas virtuais do com0com
+                    this.portList.push(serial);
                 }
             }
-            else if(msg.cmd == "serialPortConnect"){
+            else if (msg.cmd == "serialPortConnect") {
                 this.connected = true;
             }
-            else if(msg.cmd == "serialPortDisconnect"){
+            else if (msg.cmd == "serialPortDisconnect") {
                 this.connected = false;
             }
         }
     }
 
-    listPorts(){
-        this.connection.sendServerCommand({ id: this.id, cmd: "listSerialPorts"});
+    listPorts() {
+        this.connection.sendServerCommand({ id: this.id, cmd: "listSerialPorts" });
     }
 
-    sendCommand(){
+    sendCommand() {
         //nope
     }
 
-    updateCMDList(){
+    updateCMDList() {
         //nope
     }
 
     sendText(text, lineEndings) {
-        let escape = lineEndings.replace("\\n","\n");
-        escape = escape.replace("\\r","\r");
-        this.connection.sendServerCommand({ id: this.id, cmd: "sendToSerial", text: text+escape});
+        let escape = lineEndings.replace("\\n", "\n");
+        escape = escape.replace("\\r", "\r");
+        this.connection.sendServerCommand({ id: this.id, cmd: "sendToSerial", text: text + escape });
     }
 }
