@@ -1,0 +1,47 @@
+# Sempre ignore metadados e CI
+.git/
+.github/
+.vscode/
+node_modules/
+npm-debug.log
+yarn.lock
+pnpm-lock.yaml
+
+# Código-fonte/ts, testes e scripts locais
+src/**
+test/**
+tests/**
+scripts/**
+tools/**
+*.map
+*.ts
+tsconfig.json
+
+# Build intermediário que não entra no VSIX (ajuste se precisar)
+out/**
+!out/**        # se você usa "out" no runtime, comente a linha anterior
+
+# Payloads e arquivos grandes
+**/*.zip
+**/*.7z
+**/*.tar
+**/*.tar.gz
+**/*.png
+**/*.jpg
+**/*.psd
+!media/**      # mas mantenha os arquivos do webview
+
+# Documentos que não precisam (deixe os essenciais)
+docs/**
+CHANGELOG.md
+LICENSE
+README.md
+
+# EXCEÇÕES (mantenha no pacote)
+!media/**
+!dist/**
+!out/**
+!package.json
+!README.md
+!LICENSE
+!CHANGELOG.md
