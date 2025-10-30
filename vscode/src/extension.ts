@@ -83,7 +83,7 @@ function startLasecPlotServer(udpPort: number) {
 
 function stopLasecPlotServer() {
   if (udpServer) {
-    try { udpServer.close(); } catch {}
+    try { udpServer.close(); } catch { }
     udpServer = null;
   }
 }
@@ -114,7 +114,7 @@ function handleSerialConnect(msg: any) {
   const baud = msg.baud;
 
   if (serials[id]) {
-    try { serials[id].close(); } catch {}
+    try { serials[id].close(); } catch { }
     delete serials[id];
   }
 
@@ -146,7 +146,7 @@ function handleSerialSend(msg: any) {
 function handleSerialDisconnect(msg: any) {
   const id = msg.id;
   if (!serials[id]) return;
-  try { serials[id].close(); } catch {}
+  try { serials[id].close(); } catch { }
   delete serials[id];
 }
 
@@ -182,7 +182,7 @@ export function activate(context: vscode.ExtensionContext) {
 
     if (currentPanel) {
       // ❗ API nova aceita objeto de opções; evita passar undefined
-      currentPanel.reveal({ viewColumn: column, preserveFocus: false });
+      currentPanel.reveal(column, false);
     } else {
       const panel = vscode.window.createWebviewPanel(
         'lasecplot',
@@ -205,7 +205,7 @@ export function activate(context: vscode.ExtensionContext) {
           if (x) x.dispose();
         }
         for (const k of Object.keys(serials)) {
-          try { serials[k].close(); } catch {}
+          try { serials[k].close(); } catch { }
           delete serials[k];
         }
         currentPanel = undefined;
@@ -276,7 +276,7 @@ export function deactivate() {
   stopLasecPlotServer();
   if (statusBarIcon) statusBarIcon.hide();
   for (const k of Object.keys(serials)) {
-    try { serials[k].close(); } catch {}
+    try { serials[k].close(); } catch { }
     delete serials[k];
   }
 }
