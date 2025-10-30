@@ -165,7 +165,7 @@ jobs:
           *.map
           *.ts
           tsconfig.json
-          out/**
+          !out/**
           **/*.zip
           **/*.7z
           **/*.tar
