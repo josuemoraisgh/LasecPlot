@@ -150,7 +150,7 @@ jobs:
           // main correto
           pkg.main = './out/extension.js';
           // files mínimos
-          const files = new Set(['out/**','images/**','media/**','package.json','README.md','CHANGELOG.md','LICENSE','LICENSE.md','LICENSE.txt']);
+          const files = new Set(['out/**','images/**','media/**','package.json','README.md','CHANGELOG.md','LICENSE.txt']);
           pkg.files = Array.from(files);
           // engines.vscode obrigatório
           pkg.engines = pkg.engines || {};
