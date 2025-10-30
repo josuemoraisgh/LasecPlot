@@ -62,10 +62,9 @@ jobs:
           set -euxo pipefail
           RAW="${{ inputs.version }}"
           RAW="${RAW//[[:space:]]/}"
-          SANITIZED="${RAW#[vV]}"   # tira prefixo v/V
+          SANITIZED="${RAW#[vV]}"
           BASE="$SANITIZED"
 
-          # Se vier sufixo tipo -RC5/-beta2 etc, removemos (Marketplace não aceita pré-release)
           if [[ "$SANITIZED" =~ ^([0-9]+\.[0-9]+\.[0-9]+)-([A-Za-z]+)([0-9]+)$ ]]; then
             echo "::notice::Versão com sufixo detectada ('$SANITIZED'); publicaremos como estável '${BASH_REMATCH[1]}'."
             BASE="${BASH_REMATCH[1]}"
@@ -83,30 +82,52 @@ jobs:
             exit 1
           fi
 
-          # Avisos úteis, mas não bloqueiam
-          test -f README.md || { echo "::warning ::README.md ausente."; }
-          test -f LICENSE   || { echo "::warning ::LICENSE ausente."; }
-
           echo "SANITIZED_INPUT=$SANITIZED"   >> "$GITHUB_ENV"
           echo "BASE_VERSION=$BASE"           >> "$GITHUB_ENV"
           echo "EXT_NAME=$NAME"               >> "$GITHUB_ENV"
           echo "PUBLISHER=$PUB"               >> "$GITHUB_ENV"
-          # Artefato .vsix com a versão base (estável)
           echo "VSIX_NAME=${PUB}.${NAME}-${BASE}.vsix" >> "$GITHUB_ENV"
 
-      - name: Garantir package.json.files (pacote enxuto)
+      - name: Forçar dependências coerentes (remove legados e fixa serialport@^12)
+        shell: bash
+        working-directory: ${{ env.EXT_DIR }}
+        run: |
+          set -euxo pipefail
+          # remove lib que puxa serialport@9
+          npm pkg delete dependencies.node-usb-native || true
+          npm uninstall node-usb-native || true
+          # garante serialport@12 e parser@12
+          npm install serialport@^12 @serialport/parser-readline@^12 --save
+          # types/ts recentes
+          npm install -D typescript@^5 @types/node@^20
+
+      - name: Ajustar tsconfig e typings (CommonJS + outDir out)
+        shell: bash
         working-directory: ${{ env.EXT_DIR }}
         run: |
           node - <<'NODE'
-          const fs = require('fs');
-          const pkg = JSON.parse(fs.readFileSync('package.json','utf8'));
-          // Mantém apenas o necessário dentro do VSIX
-          pkg.files = ['out/**','images/**','media/**','package.json','README.md','CHANGELOG.md','LICENSE.txt'];
-          fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2));
-          console.log('package.json.files ok');
+          const fs = require('fs'); const p='tsconfig.json';
+          let j={}; try{ j=JSON.parse(fs.readFileSync(p,'utf8')); }catch{}
+          j.compilerOptions=j.compilerOptions||{};
+          Object.assign(j.compilerOptions,{
+            target:'ES2020',
+            lib:['ES2020'],
+            module:'commonjs',
+            moduleResolution:'node',
+            outDir:'out',
+            rootDir:'src',
+            strict:true,
+            sourceMap:true,
+            esModuleInterop:true,
+            skipLibCheck:true,
+            types:['node','vscode']
+          });
+          j.include=j.include||['src'];
+          fs.writeFileSync(p,JSON.stringify(j,null,2));
+          console.log('tsconfig.json ok');
           NODE
 
-      - name: Instalar dependências
+      - name: Instalar dependências do projeto
         shell: bash
         working-directory: ${{ env.EXT_DIR }}
         run: |
@@ -119,33 +140,52 @@ jobs:
             npm install --no-audit --no-fund --omit=optional || npm install --no-audit --no-fund
           fi
 
-      - name: Ajustar tsconfig e typings
-        shell: bash
+      - name: Garantir package.json.files (pacote enxuto) e main/out
         working-directory: ${{ env.EXT_DIR }}
         run: |
           node - <<'NODE'
-          const fs = require('fs'); const p='tsconfig.json';
-          let j={}; try{ j=JSON.parse(fs.readFileSync(p,'utf8')); }catch{}
-          j.compilerOptions=j.compilerOptions||{};
-          Object.assign(j.compilerOptions,{
-            target:'ES2020', module:'commonjs', moduleResolution:'node',
-            esModuleInterop:true, forceConsistentCasingInFileNames:true,
-            skipLibCheck:true, skipDefaultLibCheck:true
-          });
-          const types=new Set([...(j.compilerOptions.types||[]),'node']); j.compilerOptions.types=[...types];
-          if(!j.include) j.include=['src','out','typings'];
-          fs.writeFileSync(p,JSON.stringify(j,null,2));
-          console.log('tsconfig.json ok');
+          const fs = require('fs');
+          const pkgPath = 'package.json';
+          const pkg = JSON.parse(fs.readFileSync(pkgPath,'utf8'));
+          // main correto
+          pkg.main = './out/extension.js';
+          // files mínimos
+          const files = new Set(['out/**','images/**','media/**','package.json','README.md','CHANGELOG.md','LICENSE','LICENSE.md','LICENSE.txt']);
+          pkg.files = Array.from(files);
+          // engines.vscode obrigatório
+          pkg.engines = pkg.engines || {};
+          pkg.engines.vscode = pkg.engines.vscode || '^1.90.0';
+          // se icon não existir, remove pra não quebrar
+          if (pkg.icon && !fs.existsSync(pkg.icon)) {
+            console.log('icon ausente -> removendo pkg.icon');
+            delete pkg.icon;
+          }
+          fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2));
+          console.log('package.json ajustado');
           NODE
-          npm i -D @types/node@^20 --no-audit --no-fund
 
-      - name: Build (se existir)
+      - name: (Opcional) Copiar frontend para media/ se existir
         working-directory: ${{ env.EXT_DIR }}
-        run: npm run -s build || echo "Sem script de build"
+        run: |
+          set -euxo pipefail
+          if [ -d ../server/www ]; then
+            rm -rf ./media
+            mkdir -p ./media
+            cp -r ../server/www/* ./media/
+          else
+            echo "::notice ::../server/www não encontrado; pulando cópia para media/"
+          fi
+
+      - name: Compilar TypeScript (gera out/extension.js)
+        working-directory: ${{ env.EXT_DIR }}
+        run: |
+          set -euxo pipefail
+          npm run -s compile
+          test -f out/extension.js || { echo "::error ::out/extension.js não gerado"; ls -la out || true; exit 1; }
 
       - name: Instalar CLIs (vsce/ovsx)
         run: npm i -g @vscode/vsce ovsx
-        
+
       - name: Empacotar (.vsix)
         working-directory: ${{ env.EXT_DIR }}
         run: |
