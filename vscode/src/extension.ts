@@ -14,10 +14,11 @@ const CONFIG_NS = 'lasecplot';
 const CFG_UDP_ADDRESS = 'udpAddress';
 const CFG_UDP_PORT = 'udpPort';
 const CFG_CMD_UDP_PORT = 'cmdUdpPort';
+const CFG_DEBUG_PORTS = 'debugPorts';
 
 // ================== TIPO LOCAL PARA PORTAS ==================
 type LPort = {
-  path: string;            // COMx
+  path: string;            // COMx ou nome bruto do SERIALCOMM (CNCA0/CNCB0/etc.)
   friendlyName?: string;
   manufacturer?: string;
   serialNumber?: string;
@@ -27,7 +28,7 @@ type LPort = {
   pnpId?: string;
   devicePath?: string;     // \Device\Serial0 etc.
   isVirtual?: boolean;
-  source?: string;         // 'serialport' | 'SERIALCOMM' | ...
+  source?: string;         // 'serialport' | 'SERIALCOMM' | 'RAW'
 };
 
 // ================== ESTADO GLOBAL ==================
@@ -43,7 +44,8 @@ function getConfig() {
   const udpAddress = cfg.get<string>(CFG_UDP_ADDRESS, '');
   const udpPort = cfg.get<number>(CFG_UDP_PORT, 47269);
   const cmdUdpPort = cfg.get<number>(CFG_CMD_UDP_PORT, 47268);
-  return { cfg, udpAddress, udpPort, cmdUdpPort };
+  const debugPorts = cfg.get<boolean>(CFG_DEBUG_PORTS, false);
+  return { cfg, udpAddress, udpPort, cmdUdpPort, debugPorts };
 }
 
 function updateStatusBar(udpPort: number, cmdUdpPort: number) {
@@ -219,6 +221,15 @@ export function activate(context: vscode.ExtensionContext) {
 }
 
 // ================== COMANDOS / SERIAL ==================
+function normalizeWindowsPathForOpen(portPath: string): string {
+  if (process.platform !== 'win32') return portPath;
+  // COMx pode abrir direto; virtual (CNCA0 etc.) precisa \\.\NOME
+  if (/^COM\d+$/i.test(portPath)) return portPath;
+  // também útil para COM10+ (o serialport costuma lidar sozinho, mas não custa):
+  if (!portPath.startsWith('\\\\.\\')) return `\\\\.\\${portPath}`;
+  return portPath;
+}
+
 function runCmd(msg: any) {
   const id: string = ('id' in msg) ? msg.id : '';
 
@@ -239,19 +250,25 @@ function runCmd(msg: any) {
       delete serials[id];
     }
 
-    const portPath: string = msg.port;
-    const baud: number = msg.baud;
+    const rawPath: string = String(msg.port || '');
+    const baud: number = Number(msg.baud) || 115200;
+    if (!rawPath) {
+      currentPanel?.webview.postMessage({ id, cmd: 'serialPortError', port: rawPath, baud });
+      return;
+    }
+
+    const portPath = normalizeWindowsPathForOpen(rawPath);
 
     const sp = new SerialPort({ path: portPath, baudRate: baud });
     serials[id] = sp;
 
     sp.on('open', () => {
-      console.log('[serial] open');
-      currentPanel?.webview.postMessage({ id, cmd: 'serialPortConnect', port: portPath, baud });
+      console.log('[serial] open', portPath);
+      currentPanel?.webview.postMessage({ id, cmd: 'serialPortConnect', port: rawPath, baud });
     });
     sp.on('error', (err) => {
       console.log('[serial] error', err);
-      currentPanel?.webview.postMessage({ id, cmd: 'serialPortError', port: portPath, baud });
+      currentPanel?.webview.postMessage({ id, cmd: 'serialPortError', port: rawPath, baud });
     });
     sp.on('close', () => {
       currentPanel?.webview.postMessage({ id, cmd: 'serialPortDisconnect' });
@@ -308,43 +325,78 @@ function exportDataWithConfirmation(fileName: string, filters: { [name: string]:
 
 // ================== LISTA DE PORTAS (merge SerialPort + Registro) ==================
 async function listSerialPortsRegistrySerialCommEnhanced(): Promise<LPort[]> {
+  const { debugPorts } = getConfig();
+
   // SerialPort.list() -> normaliza para LPort
   const baseRaw = await SerialPort.list();
   const base: LPort[] = (baseRaw as any[]).map(normalizeSerialPortListItem);
 
+  if (debugPorts) {
+    console.log('[SERIALPORT.list] raw =>', baseRaw);
+    console.log('[SERIALPORT.list] norm =>', base);
+  }
+
   // Registro (SERIALCOMM)
   const reg: LPort[] = await listSerialPortsFromRegSerialComm();
 
-  // merge por COM
-  const byCom = new Map<string, LPort>();
+  if (debugPorts) {
+    console.log('[SERIALCOMM] merged entries =>', reg);
+  }
+
+  // Merge por COM (quando houver), senão por RAW:<devicePath|nome>
+  const byKey = new Map<string, LPort>();
+
+  // Primeiro o SerialPort.list (prioridade)
   for (const p of base) {
-    if (p.path) byCom.set(p.path.toUpperCase(), { ...p });
+    const key = (p.path || '').toUpperCase();
+    if (key) byKey.set(`COM:${key}`, { ...p });
   }
 
+  // Depois o que veio do Registro
   for (const r of reg) {
-    const key = r.path.toUpperCase();
-    const existing = byCom.get(key);
+    const hasCom = /^COM\d+$/i.test(r.path);
+    const key = hasCom ? `COM:${r.path.toUpperCase()}` : `RAW:${(r.devicePath || r.path || '').toUpperCase()}`;
+    const existing = byKey.get(key);
     const merged: LPort = { ...(existing || {}), ...r };
+
+    // Heurística de virtual
     merged.isVirtual = inferVirtualFromStrings(
-      merged.friendlyName, merged.pnpId, merged.devicePath, merged.manufacturer
+      merged.friendlyName, merged.pnpId, merged.devicePath, merged.manufacturer, merged.path
     );
-    byCom.set(key, merged);
+
+    byKey.set(key, merged);
   }
 
-  const out = Array.from(byCom.values());
-  out.sort((a, b) => {
+  // Ordena: COMx por número, depois os RAW (sem COM)
+  const comPorts: LPort[] = [];
+  const rawOnly: LPort[] = [];
+
+  for (const [k, v] of byKey) {
+    if (k.startsWith('COM:')) comPorts.push(v);
+    else rawOnly.push(v);
+  }
+
+  comPorts.sort((a, b) => {
     const na = parseInt((a.path || '').replace(/[^0-9]/g, ''), 10) || 0;
     const nb = parseInt((b.path || '').replace(/[^0-9]/g, ''), 10) || 0;
     return na - nb;
   });
+
+  const out = [...comPorts, ...rawOnly];
+
+  if (debugPorts) {
+    console.log('[PORTS] final =>', out);
+  }
+
   return out;
 }
 
 function normalizeSerialPortListItem(p: any): LPort {
   // SerialPort.list() muda de shape entre versões; mapeia para LPort
+  const pathGuess = p.path || p.comName || p.port || '';
   return {
-    path: p.path || p.comName || p.port || '',
-    friendlyName: p.friendlyName || p.friendly_name || p.path || p.comName,
+    path: pathGuess,
+    friendlyName: p.friendlyName || p.friendly_name || pathGuess,
     manufacturer: p.manufacturer,
     serialNumber: p.serialNumber,
     vendorId: p.vendorId,
@@ -358,40 +410,47 @@ function normalizeSerialPortListItem(p: any): LPort {
 
 async function listSerialPortsFromRegSerialComm(): Promise<LPort[]> {
   if (os.platform() !== 'win32') return [];
+
   const args = ['query', 'HKEY_LOCAL_MACHINE\\HARDWARE\\DEVICEMAP\\SERIALCOMM'];
   const stdout = await execReg(args);
+
+  const { debugPorts } = getConfig();
+  if (debugPorts) {
+    console.log('[SERIALCOMM] raw stdout ===\n' + stdout + '\n=== /SERIALCOMM');
+  }
 
   const out: LPort[] = [];
   const lines = String(stdout || '').split(/\r?\n/);
 
   for (const line of lines) {
-    // linhas do reg têm formato: "<Nome>   REG_SZ   <Dados>"
+    // Formato: "<Nome>   REG_SZ   <Dados>"
     if (!/REG_SZ/i.test(line)) continue;
 
-    // split por múltiplos espaços ou tabs
     const parts = line.trim().split(/\s{2,}|\t+/).filter(Boolean);
-    // parts[0] = Nome (ex.: \Device\Serial0, \Device\com0com10, COM3)
-    // parts[1] = "REG_SZ"
-    // parts[2] = Dados (o que queremos) -> "COM1", "COM3", "CNCA0", etc.
-    if (parts.length >= 3) {
-      const devicePath = parts[0];
-      const dataCol = (parts[2] || '').trim().toUpperCase(); // 3ª coluna
+    if (parts.length < 3) continue;
 
-      // Só COMx é porta válida para abrir. (Valores tipo "CNCA0" são aliases do com0com.)
-      if (/^COM\d+$/i.test(dataCol)) {
-        out.push({
-          path: dataCol,           // COMx (o que a extensão usa para abrir)
-          devicePath,              // 1ª coluna, útil como "friendlyName" se quiser exibir
-          friendlyName: devicePath,
-          source: 'SERIALCOMM',
-        });
-      }
-    }
+    const devicePath = parts[0];             // \Device\Serial0, \Device\com0com10, etc
+    const dataColRaw = (parts[2] || '').trim(); // pode ser "COM3", "CNCA0", etc.
+    const dataColUpper = dataColRaw.toUpperCase();
+
+    // Mantemos tudo: se for COMx, ótimo (abrível). Se for CNCA0, listamos como “raw”
+    const isCom = /^COM\d+$/i.test(dataColUpper);
+
+    out.push({
+      path: isCom ? dataColUpper : dataColRaw,   // COMx em maiúsculo; virtuais preservam casing
+      devicePath,                                // 1ª coluna
+      friendlyName: devicePath,
+      source: 'SERIALCOMM',
+      // isVirtual será inferido depois
+    });
   }
 
-  // de-dup por COM
+  // de-dup por (path + devicePath)
   const uniq = new Map<string, LPort>();
-  for (const p of out) uniq.set(p.path.toUpperCase(), p);
+  for (const p of out) {
+    const key = `${(p.path || '').toUpperCase()}|${(p.devicePath || '').toUpperCase()}`;
+    uniq.set(key, p);
+  }
   return Array.from(uniq.values());
 }
 
@@ -406,6 +465,6 @@ function execReg(args: string[]): Promise<string> {
 
 function inferVirtualFromStrings(...fields: (string | undefined)[]): boolean {
   const hay = fields.filter(Boolean).join(' ').toLowerCase();
-  const hints = ['com0com', 'virtual', 'null-modem', 'emulator', 'loopback'];
+  const hints = ['com0com', 'virtual', 'null-modem', 'emulator', 'loopback', 'cnca', 'cncb'];
   return hints.some(h => hay.includes(h));
 }
