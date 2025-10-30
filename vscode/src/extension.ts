@@ -1,4 +1,4 @@
-// extension.ts — LasecPlot
+// extension.ts — LasecPlot (corrigido)
 import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs';
@@ -9,7 +9,7 @@ const udp = require('dgram');
 let statusBarIcon: vscode.StatusBarItem | undefined;
 let currentPanel: vscode.WebviewPanel | undefined;
 let _disposables: vscode.Disposable[] = [];
-let udpServer: any = null; // data UDP server (listens on udpPort)
+let udpServer: any = null; // data UDP server (listen em udpPort)
 let serials: Record<string, any> = {}; // id -> SerialPort
 
 // ---------------- Status Bar ----------------
@@ -43,7 +43,6 @@ function loadWebviewHtml(context: vscode.ExtensionContext, panel: vscode.Webview
   const raw = fs.readFileSync(p, 'utf8');
   let html = raw;
 
-  // Reescreve src/href para as URIs do webview
   const srcList = html.match(/src\=\"(.*?)\"/g) || [];
   const hrefList = html.match(/href\=\"(.*?)\"/g) || [];
   for (const attr of [...srcList, ...hrefList]) {
@@ -53,7 +52,6 @@ function loadWebviewHtml(context: vscode.ExtensionContext, panel: vscode.Webview
     html = html.replace(attr, attr.replace(url, webURI.toString()));
   }
 
-  // Define tema padrão escuro, se variável existir
   const m = html.match(/(.*)_lasecplot_default_color_style(.*)/g);
   if (m) {
     html = html.replace(m.toString(), 'var _lasecplot_default_color_style = "dark";');
@@ -68,8 +66,7 @@ function startLasecPlotServer(udpPort: number) {
   udpServer = udp.createSocket('udp4');
   udpServer.bind(udpPort);
 
-  udpServer.on('message', function (msg: any, info: any) {
-    // Encaminha para o webview como mensagem de DEVICE via UDP
+  udpServer.on('message', function (msg: any) {
     if (currentPanel) {
       currentPanel.webview.postMessage({
         data: msg.toString(),
@@ -135,7 +132,7 @@ function handleSerialConnect(msg: any) {
   parser.on('data', (data: any) => {
     postToWebview({ id, data: data.toString(), fromSerial: true, timestamp: Date.now() });
   });
-  serials[id].on('close', (err: any) => {
+  serials[id].on('close', () => {
     postToWebview({ id, cmd: 'serialPortDisconnect' });
   });
 }
@@ -177,21 +174,20 @@ export function activate(context: vscode.ExtensionContext) {
   console.log('[LasecPlot] activate');
   ensureStatusBar(context);
 
-  // registra comando start
   const startCmd = vscode.commands.registerCommand('lasecplot.start', () => {
     const { udpPort, cmdUdpPort, remoteAddress } = getConfig();
-    // inicia UDP data server
     startLasecPlotServer(udpPort);
 
-    // cria/abre webview
-    const column = vscode.window.activeTextEditor ? vscode.window.activeTextEditor.viewColumn : vscode.ViewColumn.One;
+    const column: vscode.ViewColumn = vscode.window.activeTextEditor?.viewColumn ?? vscode.ViewColumn.One;
+
     if (currentPanel) {
-      currentPanel.reveal(column);
+      // ❗ API nova aceita objeto de opções; evita passar undefined
+      currentPanel.reveal({ viewColumn: column, preserveFocus: false });
     } else {
       const panel = vscode.window.createWebviewPanel(
         'lasecplot',
         'LasecPlot',
-        column,
+        column, // aqui é ViewColumn garantido
         {
           enableScripts: true,
           localResourceRoots: [vscode.Uri.file(path.join(context.extensionPath, 'media'))],
@@ -202,7 +198,6 @@ export function activate(context: vscode.ExtensionContext) {
       currentPanel = panel;
       panel.webview.html = loadWebviewHtml(context, panel);
 
-      // dispose
       panel.onDidDispose(() => {
         stopLasecPlotServer();
         while (_disposables.length) {
@@ -216,9 +211,7 @@ export function activate(context: vscode.ExtensionContext) {
         currentPanel = undefined;
       }, null, _disposables);
 
-      // mensagens do webview
       panel.webview.onDidReceiveMessage(message => {
-        // 1) Dados de variáveis (texto) — enviar para CMD_UDP_PORT no remoteAddress
         if ('data' in message) {
           const buf: Buffer = Buffer.isBuffer(message.data)
             ? message.data
@@ -226,7 +219,6 @@ export function activate(context: vscode.ExtensionContext) {
           sendUdpCommand(remoteAddress, cmdUdpPort, buf);
           return;
         }
-        // 2) Comandos de controle (serial, salvar, etc.)
         if ('cmd' in message) {
           const msg = message;
           const id = msg.id ?? '';
@@ -247,7 +239,7 @@ export function activate(context: vscode.ExtensionContext) {
               try {
                 exportDataWithConfirmation(path.join(msg.file.name), { JSON: ['json'] }, msg.file.content);
               } catch (error: any) {
-                void vscode.window.showErrorMessage("Couldn't write file: " + error?.message ?? String(error));
+                void vscode.window.showErrorMessage("Couldn't write file: " + (error?.message ?? String(error)));
               }
               break;
             default:
@@ -257,23 +249,19 @@ export function activate(context: vscode.ExtensionContext) {
       }, null, _disposables);
     }
 
-    // atualiza status bar com as configs atuais
     updateStatusBar(udpPort, cmdUdpPort, remoteAddress);
   });
   context.subscriptions.push(startCmd);
 
-  // mostra status bar já no startup com as configs atuais
   {
     const { udpPort, cmdUdpPort, remoteAddress } = getConfig();
     updateStatusBar(udpPort, cmdUdpPort, remoteAddress);
   }
 
-  // reflete mudanças de configuração em tempo real
   context.subscriptions.push(
     vscode.workspace.onDidChangeConfiguration(e => {
       if (e.affectsConfiguration('lasecplot')) {
         const { udpPort, cmdUdpPort, remoteAddress } = getConfig();
-        // reinicia servidor de dados se a porta mudou
         if (udpServer) {
           stopLasecPlotServer();
           startLasecPlotServer(udpPort);
