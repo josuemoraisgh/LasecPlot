@@ -18,14 +18,13 @@ tools/**
 tsconfig.json
 
 # Build intermediário que não entra no VSIX (ajuste se precisar)
-!out/**        # se você usa "out" no runtime, comente a linha anterior
+!out/**      
 
 # Payloads e arquivos grandes
 **/*.zip
 **/*.7z
 **/*.tar
 **/*.tar.gz
-**/*.png
 **/*.jpg
 **/*.psd
 !media/**      # mas mantenha os arquivos do webview
@@ -35,8 +34,6 @@ arduino/
 python/
 docs/**
 CHANGELOG.md
-LICENSE
-README.md
 
 # EXCEÇÕES (mantenha no pacote)
 !media/**
