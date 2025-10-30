@@ -18,6 +18,9 @@
 	"files": [
 		"out/**",
 		"media/**",
+	    "images/**",
+		"node_modules/serialport/**",
+		"node_modules/@serialport/**",
 		"package.json",
 		"README.md",
 		"LICENSE.txt"
