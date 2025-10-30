@@ -7,11 +7,6 @@ on:
         description: "Versão/Tag (ex.: v1.2.3 ou V1.2.3-RC5)"
         required: true
         type: string
-      prerelease:
-        description: "Marcar como pré-release?"
-        required: false
-        default: false
-        type: boolean
       notes:
         description: "Notas da release (opcional)"
         required: false
@@ -59,7 +54,7 @@ jobs:
           test -d "${{ env.EXT_DIR }}"
           test -f "${{ env.EXT_DIR }}/package.json"
 
-      - name: Normalizar versão e validar publisher
+      - name: Normalizar versão e validar publisher (sempre estável)
         id: ver
         shell: bash
         working-directory: ${{ env.EXT_DIR }}
@@ -67,32 +62,37 @@ jobs:
           set -euxo pipefail
           RAW="${{ inputs.version }}"
           RAW="${RAW//[[:space:]]/}"
-          SANITIZED="${RAW#[vV]}"
-          PR_FLAG="${{ inputs.prerelease }}"
+          SANITIZED="${RAW#[vV]}"   # tira prefixo v/V
           BASE="$SANITIZED"
+
+          # Se vier sufixo tipo -RC5/-beta2 etc, removemos (Marketplace não aceita pré-release)
           if [[ "$SANITIZED" =~ ^([0-9]+\.[0-9]+\.[0-9]+)-([A-Za-z]+)([0-9]+)$ ]]; then
+            echo "::notice::Versão com sufixo detectada ('$SANITIZED'); publicaremos como estável '${BASH_REMATCH[1]}'."
             BASE="${BASH_REMATCH[1]}"
-            PR_FLAG=true
           fi
+
           CUR=$(node -p "require('./package.json').version || ''")
           if [ "$CUR" != "$BASE" ]; then
             npm version "$BASE" --no-git-tag-version
           fi
+
           NAME=$(node -e "console.log(require('./package.json').name || '')")
           PUB=$(node -e "console.log(require('./package.json').publisher || '')")
           if [ -z "$PUB" ]; then
             echo "::error ::O campo 'publisher' está ausente no package.json. Defina o publisher (ex.: 'josuemoraisgh')."
             exit 1
           fi
+
+          # Avisos úteis, mas não bloqueiam
           test -f README.md || { echo "::warning ::README.md ausente."; }
           test -f LICENSE   || { echo "::warning ::LICENSE ausente."; }
 
           echo "SANITIZED_INPUT=$SANITIZED"   >> "$GITHUB_ENV"
           echo "BASE_VERSION=$BASE"           >> "$GITHUB_ENV"
-          echo "IS_PRERELEASE=$PR_FLAG"       >> "$GITHUB_ENV"
           echo "EXT_NAME=$NAME"               >> "$GITHUB_ENV"
           echo "PUBLISHER=$PUB"               >> "$GITHUB_ENV"
-          echo "VSIX_NAME=${PUB}.${NAME}-${SANITIZED}.vsix" >> "$GITHUB_ENV"
+          # Artefato .vsix com a versão base (estável)
+          echo "VSIX_NAME=${PUB}.${NAME}-${BASE}.vsix" >> "$GITHUB_ENV"
 
       - name: Garantir package.json.files (pacote enxuto)
         working-directory: ${{ env.EXT_DIR }}
@@ -100,12 +100,10 @@ jobs:
           node - <<'NODE'
           const fs = require('fs');
           const pkg = JSON.parse(fs.readFileSync('package.json','utf8'));
-          // Mantenha apenas o necessário no VSIX:
-          const keep = new Set(['out/**','dist/**','media/**','package.json','README.md','CHANGELOG.md','LICENSE']);
-          const files = Array.from(keep);
-          pkg.files = files;
+          // Mantém apenas o necessário dentro do VSIX
+          pkg.files = ['out/**','dist/**','media/**','package.json','README.md','CHANGELOG.md','LICENSE'];
           fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2));
-          console.log('package.json.files =', files);
+          console.log('package.json.files ok');
           NODE
 
       - name: Instalar dependências
@@ -152,7 +150,7 @@ jobs:
         working-directory: ${{ env.EXT_DIR }}
         run: |
           set -euxo pipefail
-          # Se files[] citar CHANGELOG.md inexistente, remove
+          # Se files[] citar CHANGELOG.md e ele não existir, remove para não quebrar o vsce
           if jq -e '.files?|index("CHANGELOG.md")' package.json >/dev/null 2>&1 && [ ! -f CHANGELOG.md ]; then
             echo "::warning::Removendo CHANGELOG.md de files[] para evitar erro do vsce"
             jq 'del(.files[] | select(.=="CHANGELOG.md"))' package.json > package.tmp && mv package.tmp package.json
@@ -166,30 +164,22 @@ jobs:
           path: ${{ env.VSIX_NAME }}
           if-no-files-found: error
 
-      - name: Publicar no VS Code Marketplace (vsce)
+      - name: Publicar no VS Code Marketplace (sempre estável)
         if: ${{ env.VSCE_PAT != '' }}
         working-directory: ${{ env.EXT_DIR }}
         env:
           VSCE_PAT: ${{ env.VSCE_PAT }}
         run: |
           set -euxo pipefail
-          if [ "${IS_PRERELEASE}" = "true" ]; then
-            vsce publish --pre-release --packagePath "../${VSIX_NAME}"
-          else
-            vsce publish --packagePath "../${VSIX_NAME}"
-          fi
+          vsce publish --packagePath "../${VSIX_NAME}"
 
-      - name: Publicar no Open VSX (opcional)
+      - name: Publicar no Open VSX (opcional, sempre estável)
         if: ${{ env.OPEN_VSX_TOKEN != '' }}
         env:
           OPEN_VSX_TOKEN: ${{ env.OPEN_VSX_TOKEN }}
         run: |
           set -euxo pipefail
-          if [ "${IS_PRERELEASE}" = "true" ]; then
-            ovsx publish "${VSIX_NAME}" -p "${OPEN_VSX_TOKEN}" --pre-release
-          else
-            ovsx publish "${VSIX_NAME}" -p "${OPEN_VSX_TOKEN}"
-          fi
+          ovsx publish "${VSIX_NAME}" -p "${OPEN_VSX_TOKEN}"
 
       - name: Criar/empurrar tag
         shell: bash
@@ -205,13 +195,13 @@ jobs:
           git tag -a "${TAG_NAME}" -m "Release ${TAG_NAME}" || true
           git push origin "refs/tags/${TAG_NAME}" || true
 
-      - name: Criar Release e anexar VSIX
+      - name: Criar Release e anexar VSIX (sempre estável)
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ inputs.version }}
           name: LasecPlot VSCode ${{ inputs.version }}
           body: ${{ inputs.notes }}
-          prerelease: ${{ env.IS_PRERELEASE }}
+          prerelease: false
           target_commitish: ${{ github.sha }}
           files: ${{ env.VSIX_NAME }}
         env:
