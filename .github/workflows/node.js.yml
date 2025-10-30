@@ -146,41 +146,6 @@ jobs:
       - name: Instalar CLIs (vsce/ovsx)
         run: npm i -g @vscode/vsce ovsx
         
-      - name: Escrever .vscodeignore (hardening)
-        working-directory: ${{ env.EXT_DIR }}
-        run: |
-          cat > .vscodeignore <<'EOF'
-          .git/
-          .github/
-          .vscode/
-          node_modules/
-          npm-debug.log
-          yarn.lock
-          pnpm-lock.yaml
-          src/**
-          test/**
-          tests/**
-          scripts/**
-          tools/**
-          *.map
-          *.ts
-          tsconfig.json
-          !out/**
-          **/*.zip
-          **/*.7z
-          **/*.tar
-          **/*.tar.gz
-          **/*.png
-          **/*.jpg
-          **/*.psd
-          !media/**
-          !dist/**
-          !package.json
-          !README.md
-          !LICENSE
-          !CHANGELOG.md
-          EOF
-
       - name: Empacotar (.vsix)
         working-directory: ${{ env.EXT_DIR }}
         run: |
