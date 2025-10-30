@@ -101,7 +101,7 @@ jobs:
           const fs = require('fs');
           const pkg = JSON.parse(fs.readFileSync('package.json','utf8'));
           // Mantém apenas o necessário dentro do VSIX
-          pkg.files = ['out/**','dist/**','media/**','package.json','README.md','CHANGELOG.md','LICENSE'];
+          pkg.files = ['out/**','dist/**','images/**','media/**','package.json','README.md','CHANGELOG.md','LICENSE.txt'];
           fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2));
           console.log('package.json.files ok');
           NODE
