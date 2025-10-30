@@ -10,7 +10,7 @@
 		"url": "https://github.com/josuemoraisgh/LasecPlot"
 	},
 	"engines": {
-		"vscode": "^1.47.0"
+		"vscode": "^1.90.0"
 	},
 	"categories": [
 		"Other"
@@ -20,11 +20,11 @@
 		"media/**",
 		"package.json",
 		"README.md",
-		"LICENSE"
+		"LICENSE.txt"
 	],
 	"activationEvents": [
-		"onStartupFinished",
 		"onCommand:lasecplot.start",
+		"onStartupFinished",
 		"onWebviewPanel:lasecplot"
 	],
 	"main": "./out/extension.js",
