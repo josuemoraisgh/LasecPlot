@@ -1,12 +1,18 @@
 {
-  	"compilerOptions": {
-		"module": "commonjs",
-		"target": "ES2020",
-		"lib": ["ES2020"],
-		"outDir": "out",
-		"sourceMap": true,
-		"strict": true,
-		"rootDir": "src"
-	},
-	"exclude": ["node_modules", ".vscode-test"]
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "commonjs",
+    "moduleResolution": "node",
+    "outDir": "out",
+    "rootDir": "src",
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true,
+    "strict": false,
+    "sourceMap": true,
+    "noEmitOnError": false,
+    "types": ["node"]
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["node_modules", "out", "media"]
 }

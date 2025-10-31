@@ -1,41 +1,36 @@
 {
-	"version": "2.0.0",
-	"tasks": [
-		{
-			"label": "npm_watch",
-			"type": "npm",
-			"script": "watch",
-			"problemMatcher": "$tsc-watch",
-			"isBackground": true,
-			"presentation": {
-				"reveal": "never"
-			},
-			"group": {
-				"kind": "build",
-				"isDefault": true
-			}
-		},
-		{
-			"label": "cp_media",
-			"type": "shell",
-			"options": {
-				"cwd": "${workspaceFolder}"
-			},
-			"command": "rm -rf ./media/; mkdir media; cp -r ../server/www/* ./media/",
-			"presentation": {
-				"reveal": "always"
-			},
-			"group": {
-				"kind": "build",
-				"isDefault": true
-			}
-		},
-		{
-			"label": "pre_launch",
-			"dependsOn": [
-				"cp_media",
-				"npm_watch"
-			]
-		}
-	]
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "prepare-media",
+      "type": "shell",
+      "command": "powershell",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy", "Bypass",
+        "-Command",
+        "if (Test-Path ./media) { Remove-Item -Recurse -Force ./media }; New-Item -ItemType Directory -Force -Path ./media | Out-Null; if (Test-Path ../server/www) { Copy-Item ../server/www/* ./media -Recurse -Force } else { Write-Host 'Aviso: ../server/www não encontrado. Pulando cópia.' }"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "build-go-helper (Windows)",
+      "type": "shell",
+      "command": "powershell",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy", "Bypass",
+        "-Command",
+        "./install.ps1"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}/serialPort"
+      },
+      "problemMatcher": [],
+      "windows": { "command": "powershell" }
+    }
+  ]
 }

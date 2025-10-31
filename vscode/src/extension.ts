@@ -3,58 +3,51 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
-import { execFile } from 'child_process';
+import { spawn, execFile } from 'child_process';
 import * as dgram from 'dgram';
 
-// ================== CONFIG ==================
+/**
+ * LasecPlot – implementação sem "serialport" do Node.
+ * Usa o helper em Go p/ listar/abrir portas e faz fallback no Registro (Windows).
+ */
+
 const CONFIG_NS = 'lasecplot';
-const CFG_UDP_ADDRESS   = 'udpAddress';     // endereço local para receber dados UDP (viewer)
-const CFG_UDP_PORT      = 'udpPort';        // porta de dados UDP (viewer)
-const CFG_CMD_UDP_PORT  = 'cmdUdpPort';     // porta de comando UDP (lado remoto)
-const CFG_REMOTE_ADDR   = 'remoteAddress';  // (se você usa no webview) endereço remoto para CONNECT
-const CFG_GO_HELPER     = 'goHelperPath';   // caminho do binário helper em Go (opcional)
+const CFG_UDP_ADDRESS = 'udpAddress';
+const CFG_UDP_PORT = 'udpPort';
+const CFG_CMD_UDP_PORT = 'cmdUdpPort';
 
-// ================== ESTADO GLOBAL ==================
-let udpServer: dgram.Socket | null = null;
-let currentPanel: vscode.WebviewPanel | null = null;
-const _disposables: vscode.Disposable[] = [];
+// ---------- Estado ----------
 let statusBarIcon: vscode.StatusBarItem;
+let currentPanel: vscode.WebviewPanel | null = null;
+let udpServer: dgram.Socket | null = null;
+const _disposables: vscode.Disposable[] = [];
 
-// ================== TIPOS AUXILIARES ==================
-type PortInfoLite = {
-  path: string;                // "COM3", "/dev/ttyUSB0", etc
-  friendlyName?: string;       // texto bonito
-  isVirtual?: boolean;         // heurística do helper
-  manufacturer?: string;
-  productId?: string;
-  vendorId?: string;
-  deviceLocation?: string;
-  pnpId?: string;
-  _source?: string;            // para debug: "go-helper", etc
+type SerialSession = {
+  proc: import('child_process').ChildProcessWithoutNullStreams;
+  port: string;
+  baud: number;
 };
+const sessions: Record<string, SerialSession> = {};
 
-// ================== CONFIG HELPERS ==================
+// ---------- Config / Statusbar / UDP ----------
 function getConfig() {
   const cfg = vscode.workspace.getConfiguration(CONFIG_NS);
-  const udpAddress  = cfg.get<string>(CFG_UDP_ADDRESS, '127.0.0.1');
-  const udpPort     = cfg.get<number>(CFG_UDP_PORT, 47269);
-  const cmdUdpPort  = cfg.get<number>(CFG_CMD_UDP_PORT, 47268);
-  const remoteAddr  = cfg.get<string>(CFG_REMOTE_ADDR, '127.0.0.1');
-  const goHelper    = cfg.get<string>(CFG_GO_HELPER, '');
-  return { cfg, udpAddress, udpPort, cmdUdpPort, remoteAddr, goHelper };
+  const udpAddress = cfg.get<string>(CFG_UDP_ADDRESS, '127.0.0.1');
+  const udpPort = cfg.get<number>(CFG_UDP_PORT, 47269);
+  const cmdUdpPort = cfg.get<number>(CFG_CMD_UDP_PORT, 47268);
+  return { cfg, udpAddress, udpPort, cmdUdpPort };
 }
 
 function updateStatusBar(udpPort: number, cmdUdpPort: number) {
   if (!statusBarIcon) return;
   statusBarIcon.text = `$(graph-line) LasecPlot`;
   statusBarIcon.tooltip = `UDP ${udpPort} • CMD ${cmdUdpPort}`;
-  statusBarIcon.command = 'lasecplot.start';
   statusBarIcon.show();
 }
 
-function bindUdpServer(udpPort: number, cmdUdpPort: number) {
+function bindUdpServer(udpPort: number) {
   if (udpServer) {
-    try { udpServer.close(); } catch { /* ignore */ }
+    try { udpServer.close(); } catch {}
     udpServer = null;
   }
   udpServer = dgram.createSocket('udp4');
@@ -69,209 +62,320 @@ function bindUdpServer(udpPort: number, cmdUdpPort: number) {
   });
 
   udpServer.on('error', (err) => console.error('[UDP] server error:', err));
-  updateStatusBar(udpPort, cmdUdpPort);
 }
 
-async function saveAddressPort(address: string, port: number) {
-  const { cfg, udpPort, cmdUdpPort } = getConfig();
-  await cfg.update(CFG_UDP_ADDRESS, address, vscode.ConfigurationTarget.Global);
-  if (udpPort !== port) {
-    await cfg.update(CFG_UDP_PORT, port, vscode.ConfigurationTarget.Global);
-    bindUdpServer(port, cmdUdpPort);
-  } else {
-    updateStatusBar(udpPort, cmdUdpPort);
+// ---------- Helper (caminhos) ----------
+function platformFolder(): string {
+  const p = process.platform;
+  const arch = process.arch;
+  if (p === 'win32') return arch === 'arm64' ? 'win32-arm64' : 'win32-x64';
+  if (p === 'darwin') return arch === 'arm64' ? 'darwin-arm64' : 'darwin-x64';
+  return arch === 'arm64' ? 'linux-arm64' : 'linux-x64';
+}
+function helperExecutableName(): string {
+  return process.platform === 'win32' ? 'lasecplot-helper.exe' : 'lasecplot-helper';
+}
+function resolveHelperPath(ctx: vscode.ExtensionContext): string {
+  // 1) VSIX instalado
+  const binInExt = path.join(ctx.extensionPath, 'bin', platformFolder(), helperExecutableName());
+  if (fs.existsSync(binInExt)) return binInExt;
+
+  // 2) Dev/F5: <workspace>/vscode/bin/...
+  const ws = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+  if (ws) {
+    const devBin = path.join(ws, 'vscode', 'bin', platformFolder(), helperExecutableName());
+    if (fs.existsSync(devBin)) return devBin;
   }
+
+  // 3) PATH
+  return helperExecutableName();
 }
 
-async function saveCmdPort(port: number) {
-  const { cfg, udpPort, cmdUdpPort } = getConfig();
-  if (cmdUdpPort !== port) {
-    await cfg.update(CFG_CMD_UDP_PORT, port, vscode.ConfigurationTarget.Global);
-    updateStatusBar(udpPort, port);
+// ---------- Listagem de portas ----------
+type PortInfoLite = {
+  path: string;            // "COM3" | "/dev/ttyUSB0"
+  friendlyName?: string;
+  manufacturer?: string;
+  isVirtual?: boolean;
+  devicePath?: string;
+  _source?: string;
+};
+
+function execReg(args: string[]): Promise<string> {
+  return new Promise((resolve, reject) => {
+    execFile('reg.exe', args, { windowsHide: true }, (err, stdout, stderr) => {
+      if (err) return reject(stderr || err);
+      resolve(String(stdout || ''));
+    });
+  });
+}
+
+async function listFromWindowsRegistry(): Promise<PortInfoLite[]> {
+  if (os.platform() !== 'win32') return [];
+  const out: PortInfoLite[] = [];
+  try {
+    const stdout = await execReg(['query','HKEY_LOCAL_MACHINE\\HARDWARE\\DEVICEMAP\\SERIALCOMM']);
+    const lines = stdout.split(/\r?\n/);
+    for (const line of lines) {
+      if (!/REG_SZ/i.test(line)) continue;
+      const parts = line.trim().split(/\s{2,}|\t+/).filter(Boolean);
+      if (parts.length >= 3) {
+        const devicePath = parts[0];
+        const dataCol = (parts[2] || '').trim().toUpperCase();
+        if (/^COM\d+$/i.test(dataCol)) {
+          out.push({
+            path: dataCol,
+            devicePath,
+            friendlyName: devicePath,
+            _source: 'SERIALCOMM'
+          });
+        }
+      }
+    }
+  } catch (e) {
+    console.warn('[serial] registry read failed:', e);
   }
+  const uniq = new Map<string, PortInfoLite>();
+  for (const p of out) uniq.set(p.path.toUpperCase(), p);
+  return Array.from(uniq.values());
 }
 
-// ================== ATIVAÇÃO ==================
+async function listViaHelper(ctx: vscode.ExtensionContext): Promise<PortInfoLite[]> {
+  const helper = resolveHelperPath(ctx);
+  return new Promise<PortInfoLite[]>((resolve, reject) => {
+    const p = spawn(helper, ['list'], { stdio: ['ignore','pipe','pipe'] });
+    let buf = '', err = '';
+    p.stdout.on('data', d => buf += d.toString());
+    p.stderr.on('data', d => err += d.toString());
+    p.on('error', reject);
+    p.on('close', (code) => {
+      if (code !== 0) return reject(new Error(err || `helper exited ${code}`));
+      try { resolve(JSON.parse(buf)); }
+      catch (e) { reject(new Error('invalid JSON from helper: ' + e)); }
+    });
+  });
+}
+
+async function listSerialPorts(ctx: vscode.ExtensionContext): Promise<PortInfoLite[]> {
+  try {
+    const via = await listViaHelper(ctx);
+    via.sort((a,b) => {
+      const na = parseInt((a.path||'').replace(/[^0-9]/g,'')) || 0;
+      const nb = parseInt((b.path||'').replace(/[^0-9]/g,'')) || 0;
+      if (na && nb) return na - nb;
+      return (a.path||'').localeCompare((b.path||''));
+    });
+    return via;
+  } catch (e) {
+    console.warn('[serial] list via helper failed:', e);
+  }
+  const reg = await listFromWindowsRegistry();
+  reg.sort((a,b) => {
+    const na = parseInt((a.path||'').replace(/[^0-9]/g,'')) || 0;
+    const nb = parseInt((b.path||'').replace(/[^0-9]/g,'')) || 0;
+    if (na && nb) return na - nb;
+    return (a.path||'').localeCompare((b.path||''));
+  });
+  return reg;
+}
+
+// ---------- Serial via helper ----------
+function openSerial(ctx: vscode.ExtensionContext, id: string, port: string, baud: number) {
+  closeSerial(id);
+  const helper = resolveHelperPath(ctx);
+  const child = spawn(helper, ['open','--port', port, '--baud', String(baud), '--read'],
+    { stdio: ['pipe','pipe','pipe'] });
+
+  child.stdout.on('data', (d) => {
+    currentPanel?.webview.postMessage({
+      id,
+      data: d.toString(),
+      fromSerial: true,
+      timestamp: Date.now()
+    });
+  });
+  child.stderr.on('data', (d) => console.warn('[serial] stderr:', d.toString()));
+  child.on('close', () => {
+    delete sessions[id];
+    currentPanel?.webview.postMessage({ id, cmd: 'serialPortDisconnect' });
+  });
+
+  sessions[id] = { proc: child, port, baud };
+  currentPanel?.webview.postMessage({ id, cmd: 'serialPortConnect', port, baud });
+}
+
+function sendToSerial(id: string, text: string) {
+  const s = sessions[id];
+  if (!s) return;
+  try { s.proc.stdin.write(text); }
+  catch (e) { console.warn('[serial] write failed:', e); }
+}
+function closeSerial(id: string) {
+  const s = sessions[id];
+  if (!s) return;
+  try { s.proc.kill(); } catch {}
+  delete sessions[id];
+}
+
+// ---------- Activate / Webview ----------
 export function activate(context: vscode.ExtensionContext) {
+  context.subscriptions.push(
+    vscode.commands.registerCommand('lasecplot.start', () => openPanel(context))
+  );
+
   statusBarIcon = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
   statusBarIcon.command = 'lasecplot.start';
+  statusBarIcon.text = '$(graph-line) LasecPlot';
   context.subscriptions.push(statusBarIcon);
-
-  context.subscriptions.push(
-    vscode.commands.registerCommand('lasecplot.start', () => {
-      const { udpAddress, udpPort, cmdUdpPort, remoteAddr } = getConfig();
-      bindUdpServer(udpPort, cmdUdpPort);
-
-      const column: vscode.ViewColumn =
-        vscode.window.activeTextEditor?.viewColumn ?? vscode.ViewColumn.One;
-
-      if (currentPanel) {
-        currentPanel.reveal(column, false);
-        return;
-      }
-
-      const panel = vscode.window.createWebviewPanel(
-        'lasecplot',
-        'LasecPlot',
-        column,
-        {
-          enableScripts: true,
-          localResourceRoots: [vscode.Uri.file(path.join(context.extensionPath, 'media'))],
-          retainContextWhenHidden: true,
-          enableCommandUris: true,
-        }
-      );
-      currentPanel = panel;
-
-      // carrega index.html e reescreve src/href
-      fs.readFile(path.join(context.extensionPath, 'media', 'index.html'), (err, data) => {
-        if (err) { console.error(err); return; }
-        let rawHTML = data.toString();
-
-        const srcList  = rawHTML.match(/src="(.*?)"/g)  ?? [];
-        const hrefList = rawHTML.match(/href="(.*?)"/g) ?? [];
-        for (const attr of [...srcList, ...hrefList]) {
-          const url = attr.split('"')[1];
-          const extensionURI = vscode.Uri.joinPath(context.extensionUri, "./media/" + url);
-          const webURI = panel.webview.asWebviewUri(extensionURI);
-          const toReplace = attr.replace(url, webURI.toString());
-          rawHTML = rawHTML.replace(attr, toReplace);
-        }
-
-        const lasecplotStyle = rawHTML.match(/(.*)_lasecplot_default_color_style(.*)/g);
-        if (lasecplotStyle != null) {
-          rawHTML = rawHTML.replace(lasecplotStyle.toString(), 'var _lasecplot_default_color_style = "dark";');
-        }
-
-        panel.webview.html = rawHTML;
-
-        // entrega config inicial ao webview
-        panel.webview.postMessage({
-          type: 'initConfig',
-          udpAddress,
-          udpPort,
-          cmdUdpPort,
-          remoteAddr
-        });
-      });
-
-      panel.onDidDispose(() => {
-        if (udpServer) {
-          try { udpServer.close(); } catch { /* ignore */ }
-          udpServer = null;
-        }
-        while (_disposables.length) {
-          const x = _disposables.pop();
-          if (x) x.dispose();
-        }
-        currentPanel = null;
-      }, null, _disposables);
-
-      panel.webview.onDidReceiveMessage(async (message) => {
-        // salvar host/port de dados
-        if (message?.type === 'saveAddressPort') {
-          const host = String(message.host || '').trim();
-          const portNum = Number(message.port);
-          if (host && Number.isFinite(portNum)) {
-            await saveAddressPort(host, portNum);
-          }
-          return;
-        }
-
-        // salvar cmd port
-        if (message?.type === 'saveCmdPort') {
-          const portNum = Number(message.port);
-          if (Number.isFinite(portNum)) {
-            await saveCmdPort(portNum);
-          }
-          return;
-        }
-
-        // payload para porta de comando (envia do host -> remoto)
-        if ('data' in message) {
-          const { udpAddress: addr, cmdUdpPort: currentCmdPort } = getConfig();
-          const buf: Buffer = Buffer.isBuffer(message.data)
-            ? message.data
-            : Buffer.from(String(message.data));
-          const udpClient = dgram.createSocket('udp4');
-          udpClient.send(buf, 0, buf.length, currentCmdPort, addr || '127.0.0.1', () => {
-            udpClient.close();
-          });
-          return;
-        }
-
-        // comandos gerais (serial agora via helper em Go)
-        if ('cmd' in message) {
-          runCmd(message);
-          return;
-        }
-      }, null, _disposables);
-    })
-  );
+  statusBarIcon.show();
 
   const { udpPort, cmdUdpPort } = getConfig();
   updateStatusBar(udpPort, cmdUdpPort);
-  statusBarIcon.show();
 }
 
-// ================== COMANDOS / SHIMS PARA SERIAL (via Go helper) ==================
-function runCmd(msg: any) {
-  const id: string = ('id' in msg) ? msg.id : '';
+function openPanel(context: vscode.ExtensionContext) {
+  const { udpAddress, udpPort, cmdUdpPort } = getConfig();
+  bindUdpServer(udpPort);
 
-  switch (msg.cmd) {
-    case 'listSerialPorts':
-      listSerialViaGoHelper().then((ports) => {
-        currentPanel?.webview.postMessage({ id, cmd: 'serialPortList', list: ports });
-      }).catch((err) => {
-        console.warn('[serial] list via Go helper failed:', err);
-        currentPanel?.webview.postMessage({ id, cmd: 'serialPortList', list: [] as PortInfoLite[] });
-      });
-      break;
+  const column = vscode.window.activeTextEditor?.viewColumn ?? vscode.ViewColumn.One;
+  if (currentPanel) { currentPanel.reveal(column, false); return; }
 
-    case 'connectSerialPort':
-      openSerialViaGoHelper(id, msg.port, msg.baud).then((ok) => {
-        if (ok) {
-          currentPanel?.webview.postMessage({ id, cmd: 'serialPortConnect', port: msg.port, baud: msg.baud });
-          // Nota: o streaming de dados serial -> webview também deve vir do helper (ex.: via UDP/IPC)
-          // Aqui, sem helper ativo, não há push de dados.
-        } else {
-          currentPanel?.webview.postMessage({ id, cmd: 'serialPortError', port: msg.port, baud: msg.baud });
-        }
-      }).catch((_e) => {
-        currentPanel?.webview.postMessage({ id, cmd: 'serialPortError', port: msg.port, baud: msg.baud });
-      });
-      break;
+  const panel = vscode.window.createWebviewPanel(
+    'lasecplot',
+    'LasecPlot',
+    column,
+    {
+      enableScripts: true,
+      localResourceRoots: [vscode.Uri.file(path.join(context.extensionPath, 'media'))],
+      retainContextWhenHidden: true,
+      enableCommandUris: true,
+    }
+  );
+  currentPanel = panel;
 
-    case 'sendToSerial':
-      writeSerialViaGoHelper(id, msg.text).then(() => {
-        // ok
-      }).catch((_e) => {
-        currentPanel?.webview.postMessage({ id, cmd: 'serialPortError' });
-      });
-      break;
+  fs.readFile(path.join(context.extensionPath, 'media', 'index.html'), (err, data) => {
+    if (err) { console.error(err); return; }
+    let rawHTML = data.toString();
 
-    case 'disconnectSerialPort':
-      closeSerialViaGoHelper(id).then(() => {
-        currentPanel?.webview.postMessage({ id, cmd: 'serialPortDisconnect' });
-      }).catch((_e) => {
-        currentPanel?.webview.postMessage({ id, cmd: 'serialPortDisconnect' });
-      });
-      break;
+    const srcList = rawHTML.match(/src="(.*?)"/g) ?? [];
+    const hrefList = rawHTML.match(/href="(.*?)"/g) ?? [];
+    for (const attr of [...srcList, ...hrefList]) {
+      const url = attr.split('"')[1];
+      const extensionURI = vscode.Uri.joinPath(context.extensionUri, "./media/" + url);
+      const webURI = panel.webview.asWebviewUri(extensionURI);
+      const toReplace = attr.replace(url, webURI.toString());
+      rawHTML = rawHTML.replace(attr, toReplace);
+    }
 
-    case 'saveFile':
-      try {
-        exportDataWithConfirmation(path.join(msg.file.name), { JSON: ['json'] }, msg.file.content);
-      } catch (error: any) {
-        void vscode.window.showErrorMessage("Couldn't write file: " + error);
+    const themeVar = rawHTML.match(/(.*)_lasecplot_default_color_style(.*)/g);
+    if (themeVar) {
+      rawHTML = rawHTML.replace(themeVar.toString(), 'var _lasecplot_default_color_style = "dark";');
+    }
+
+    panel.webview.html = rawHTML;
+
+    panel.webview.postMessage({
+      type: 'initConfig',
+      udpAddress,
+      udpPort,
+      cmdUdpPort,
+    });
+  });
+
+  panel.onDidDispose(() => {
+    if (udpServer) { try { udpServer.close(); } catch {} udpServer = null; }
+    Object.keys(sessions).forEach(closeSerial);
+    while (_disposables.length) { const x = _disposables.pop(); if (x) x.dispose(); }
+    currentPanel = null;
+  }, null, _disposables);
+
+  panel.webview.onDidReceiveMessage(async (message) => {
+    if (message?.type === 'saveAddressPort') {
+      const { cfg, udpPort: currUDP, cmdUdpPort: currCmd } = getConfig();
+      const host = String(message.host || '').trim();
+      const portNum = Number(message.port);
+      if (host) await cfg.update(CFG_UDP_ADDRESS, host, vscode.ConfigurationTarget.Global);
+      if (Number.isFinite(portNum) && portNum !== currUDP) {
+        await cfg.update(CFG_UDP_PORT, portNum, vscode.ConfigurationTarget.Global);
+        bindUdpServer(portNum);
+        updateStatusBar(portNum, currCmd);
+      } else {
+        updateStatusBar(currUDP, currCmd);
       }
-      break;
+      return;
+    }
 
-    default:
-      console.warn('[cmd] desconhecido:', msg.cmd);
+    if (message?.type === 'saveCmdPort') {
+      const { cfg, udpPort: currUDP } = getConfig();
+      const portNum = Number(message.port);
+      if (Number.isFinite(portNum)) {
+        await cfg.update(CFG_CMD_UDP_PORT, portNum, vscode.ConfigurationTarget.Global);
+        const { cmdUdpPort } = getConfig();
+        updateStatusBar(currUDP, cmdUdpPort);
+      }
+      return;
+    }
+
+    if ('data' in message) {
+      const { udpAddress: addr, cmdUdpPort: currentCmdPort } = getConfig();
+      const buf: Buffer = Buffer.isBuffer(message.data)
+        ? message.data
+        : Buffer.from(String(message.data));
+      const udpClient = dgram.createSocket('udp4');
+      udpClient.send(buf, 0, buf.length, currentCmdPort, addr || '127.0.0.1', () => {
+        udpClient.close();
+      });
+      return;
+    }
+
+    if ('cmd' in message) {
+      runCmdFromWebview(context, message);
+      return;
+    }
+  }, null, _disposables);
+}
+
+function runCmdFromWebview(ctx: vscode.ExtensionContext, msg: any) {
+  const id: string = ('id' in msg) ? String(msg.id) : '';
+
+  if (msg.cmd === 'listSerialPorts') {
+    listSerialPorts(ctx).then((ports) => {
+      currentPanel?.webview.postMessage({ id, cmd: 'serialPortList', list: ports });
+    }).catch((err) => {
+      console.warn('[serial] list failed altogether:', err);
+      currentPanel?.webview.postMessage({ id, cmd: 'serialPortList', list: [] });
+    });
+    return;
+  }
+
+  if (msg.cmd === 'connectSerialPort') {
+    const portPath: string = msg.port;
+    const baud: number = Number(msg.baud) || 115200;
+    openSerial(ctx, id, portPath, baud);
+    return;
+  }
+
+  if (msg.cmd === 'sendToSerial') {
+    sendToSerial(id, String(msg.text || ''));
+    return;
+  }
+
+  if (msg.cmd === 'disconnectSerialPort') {
+    closeSerial(id);
+    return;
+  }
+
+  if (msg.cmd === 'saveFile') {
+    try {
+      exportDataWithConfirmation(path.join(msg.file.name), { JSON: ['json'] }, msg.file.content);
+    } catch (error: any) {
+      void vscode.window.showErrorMessage("Couldn't write file: " + error);
+    }
+    return;
   }
 }
 
-// ================== SAVE DIALOG ==================
+// ---------- Save helper ----------
 function exportDataWithConfirmation(fileName: string, filters: { [name: string]: string[] }, data: string): void {
   void vscode.window.showSaveDialog({
     defaultUri: vscode.Uri.file(fileName),
@@ -279,100 +383,18 @@ function exportDataWithConfirmation(fileName: string, filters: { [name: string]:
   }).then((uri: vscode.Uri | undefined) => {
     if (uri) {
       const value = uri.fsPath;
-      fs.writeFile(value, data, (error: any) => {
+      fs.writeFile(value, data, (error:any) => {
         if (error) {
           void vscode.window.showErrorMessage('Could not write to file: ' + value + ': ' + error.message);
         } else {
-          void vscode.window.showInformationMessage('Saved ' + value);
+          void vscode.window.showInformationMessage('Saved ' + value );
         }
       });
     }
   });
 }
 
-// ================== INTEGRAÇÃO COM HELPER EM GO ==================
-// Convenção proposta (ajuste no seu binário Go quando pronto):
-//   lasecplot-helper list-serial --json
-//   lasecplot-helper open-serial   --id <id> --port <COM3> --baud <115200>
-//   lasecplot-helper write-serial  --id <id> --text "<payload>"
-//   lasecplot-helper close-serial  --id <id>
-//
-// Observação: o "stream" de leitura serial -> UI você pode fazer o helper enviar
-// por UDP para (udpAddress:udpPort) com o mesmo formato que você já usa.
-
-function resolveGoHelperPath(): string | null {
-  const { goHelper } = getConfig();
-  if (goHelper && fs.existsSync(goHelper)) return goHelper;
-
-  // tenta nomes padrão no PATH
-  const candidates = os.platform() === 'win32'
-    ? ['lasecplot-helper.exe', 'lasecplot-go-helper.exe']
-    : ['lasecplot-helper', 'lasecplot-go-helper'];
-
-  for (const name of candidates) {
-    // confia no PATH (execFile resolve)
-    return name;
-  }
-  return null;
-}
-
-function execHelper(args: string[]): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const helper = resolveGoHelperPath();
-    if (!helper) return reject(new Error('Go helper path not configured'));
-    execFile(helper, args, { windowsHide: true }, (err, stdout, stderr) => {
-      if (err) return reject(stderr || err);
-      resolve(String(stdout || ''));
-    });
-  });
-}
-
-async function listSerialViaGoHelper(): Promise<PortInfoLite[]> {
-  // Se não houver helper, retorna lista vazia
-  const helper = resolveGoHelperPath();
-  if (!helper) return [];
-
-  const args = ['list-serial', '--json'];
-  const out = await execHelper(args);
-  try {
-    const arr = JSON.parse(out);
-    if (Array.isArray(arr)) {
-      return arr.map((p: any) => ({
-        path: String(p.path || ''),
-        friendlyName: p.friendlyName ? String(p.friendlyName) : undefined,
-        isVirtual: !!p.isVirtual,
-        manufacturer: p.manufacturer ? String(p.manufacturer) : undefined,
-        productId: p.productId ? String(p.productId) : undefined,
-        vendorId: p.vendorId ? String(p.vendorId) : undefined,
-        deviceLocation: p.deviceLocation ? String(p.deviceLocation) : undefined,
-        pnpId: p.pnpId ? String(p.pnpId) : undefined,
-        _source: 'go-helper'
-      } as PortInfoLite)).filter(p => p.path);
-    }
-    return [];
-  } catch {
-    return [];
-  }
-}
-
-async function openSerialViaGoHelper(id: string, port: string, baud: number): Promise<boolean> {
-  const helper = resolveGoHelperPath();
-  if (!helper) return false;
-  const args = ['open-serial', '--id', id, '--port', port, '--baud', String(baud)];
-  await execHelper(args);
-  return true;
-}
-
-async function writeSerialViaGoHelper(id: string, text: string): Promise<void> {
-  const helper = resolveGoHelperPath();
-  if (!helper) throw new Error('helper missing');
-  const args = ['write-serial', '--id', id, '--text', String(text ?? '')];
-  await execHelper(args);
-}
-
-async function closeSerialViaGoHelper(id: string): Promise<void> {
-  const helper = resolveGoHelperPath();
-  if (!helper) return;
-  const args = ['close-serial', '--id', id];
-  await execHelper(args);
+export function deactivate() {
+  if (udpServer) { try { udpServer.close(); } catch {} udpServer = null; }
+  Object.keys(sessions).forEach(closeSerial);
 }
