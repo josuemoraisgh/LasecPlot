@@ -2,7 +2,7 @@
 
 Plots telemetry sent over **Serial** or **UDP Packets**.
 
-![](images/preview-vscode.png)
+![](https://github.com/josuemoraisgh/LasecPlot/raw/HEAD/images/preview-vscode.png)
 
 ## From an Arduino (Serial)
 
@@ -119,4 +119,4 @@ You just need to send a UDP packet with the proper text in it. Open your web bro
 
 LasecPlot project received the generous technical support of [Wandercraft](https://www.wandercraft.eu/).
 
-![](images/wandercraft.png)
+![](https://github.com/josuemoraisgh/LasecPlot/raw/HEAD/images/wandercraft.png)
