@@ -53,7 +53,7 @@
                                     </div>
 
                                     <!-- AGORA BASEADO EM input.connected + mostra configure.remoteAddress quando conectado -->
-                                    <div v-if="configure.remoteAddress && configure.remoteAddress !== '127.0.0.1'" class="connection-input-status-connected">
+                                    <div v-if="input.connected && configure.remoteAddress !== ''" class="connection-input-status-connected">
                                         Connected: {{configure.remoteAddress}}
                                     </div>
                                     <div v-else class="connection-input-status-not-connected">

@@ -162,6 +162,37 @@ app.createConnection = function () {
     }
   }
 
+  // Cancela a criação de conexão e envia DISCONNECT:<LOCAL_IP>:<UDP_PORT>
+  app.cancelConnection = function () {
+    // fecha o modal
+    this.creatingConnection = false;
+
+    // marca todos os inputs UDP como desconectados
+    setAllUdpConnected(false);
+
+    // monta DISCONNECT:<LOCAL_IP>:<UDP_PORT>
+    const localIP = this.configure.udpAddress || '127.0.0.1';
+    const localPort = Number(this.configure.udpPort || 0);
+    const payload = `DISCONNECT:${localIP}:${localPort}`;
+
+    console.log(
+      "[UDP] sending disconnect:",
+      payload,
+      "to",
+      this.configure.remoteAddress,
+      ":",
+      this.configure.cmdUdpPort
+    );
+
+    // envia via extensão (host) para o destino remoto
+    if (vscode) vscode.postMessage({ data: payload });
+
+    // limpa estado de handshake
+    clearTimeout(app.handshake.timer);
+    app.handshake.pending = false;
+    app.handshake.expected = { remoteHost: '', cmdPort: null };
+  };
+
   clearTimeout(app.handshake.timer);
   app.handshake.expected = { remoteHost: host, cmdPort: port };
   app.handshake.pending = true;
