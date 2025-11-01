@@ -572,6 +572,14 @@ body {
     border-radius: 50px;
 }
 
+.connection-input-status-connected {
+	background-color: #078732;
+    padding: 1px 5px 1px 5px;
+    color: white;
+	font-size: 11px;
+    border-radius: 50px;
+}
+
 .connection-serial-input {
 	display: flex;
 	flex-direction: row;

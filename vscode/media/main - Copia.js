@@ -1,9 +1,8 @@
 // main.js — LasecPlot (webview)
-// Mantém o fluxo original, com ajustes:
-// 1) configure.remoteAddress só muda quando createConnection() é acionado com host:porta válidos.
-// 2) initConfig não sobrescreve remoteAddress.
-// 3) Handshake CONNECTED/DISCONNECTED só alterna "connected" dos inputs UDP.
-// 4) Persistência (vscode.setState/localStorage) e logs para depurar.
+// - input.address / input.port mostram IP/porta LOCAIS (udpAddress/udpPort)
+// - newConnectionAddress é o IP:PORTA REMOTO (remoteAddress/cmdUdpPort)
+// - Handshake UDP: envia "CONNECT:<IP_LOCAL>:<UDP_PORT>" para REMOTO:CMD_UDP_PORT
+//   e aguarda ">CONNECTED:<IP_REMOTO>:<CMD_UDP_PORT>" para marcar connected.
 
 var vscode = null;
 if ("acquireVsCodeApi" in window) vscode = acquireVsCodeApi();
@@ -25,6 +24,7 @@ if (app.$set) {
   app.configure.cmdUdpPort = app.configure.cmdUdpPort || null;
 }
 
+// Estado de handshake
 app.handshake = {
   pending: false,
   timer: null,
@@ -43,29 +43,28 @@ function parseHostPort(addr) {
 /* ======================= Persistência ======================= */
 
 function persistLocalUdp(address, port) {
+  if (vscode) {
+    const prev = (vscode.getState && vscode.getState()) || {};
+    vscode.setState({ ...prev, udpAddress: address, udpPort: port });
+    vscode.postMessage({ type: 'saveAddressPort', host: address, port });
+  }
   try {
-    if (vscode) {
-      const prev = (vscode.getState && vscode.getState()) || {};
-      vscode.setState({ ...prev, udpAddress: address, udpPort: port });
-      vscode.postMessage({ type: 'saveAddressPort', host: address, port });
-    }
     localStorage.setItem('lasecplot.udpAddress', address || '');
     localStorage.setItem('lasecplot.udpPort', String(port));
-  } catch (_) { /* ignore */ }
+  } catch (_) { }
 }
 
 function persistRemoteCmd(address, port) {
+  if (vscode) {
+    const prev = (vscode.getState && vscode.getState()) || {};
+    vscode.setState({ ...prev, remoteAddress: address, cmdUdpPort: port });
+    vscode.postMessage({ type: 'saveRemoteAddress', host: address });
+    vscode.postMessage({ type: 'saveCmdPort', port });
+  }
   try {
-    if (vscode) {
-      const prev = (vscode.getState && vscode.getState()) || {};
-      vscode.setState({ ...prev, remoteAddress: address, cmdUdpPort: port });
-      // Mantemos compat com seus handlers no host
-      vscode.postMessage({ type: 'saveRemoteAddress', host: address });
-      vscode.postMessage({ type: 'saveCmdPort', port });
-    }
     localStorage.setItem('lasecplot.remoteAddress', address || '');
     localStorage.setItem('lasecplot.cmdUdpPort', String(port));
-  } catch (_) { /* ignore */ }
+  } catch (_) { }
 }
 
 /* ======================= Restauração ======================= */
@@ -90,7 +89,7 @@ app.loadStoredConfig = function () {
       const q = localStorage.getItem('lasecplot.cmdUdpPort');
       if (q != null && q !== '' && !Number.isNaN(Number(q))) cmdUdpPort = Number(q);
     }
-  } catch (_) { /* ignore */ }
+  } catch (_) { }
 
   if (app.$set) {
     app.$set(app.configure, 'udpAddress', udpAddress || '');
@@ -104,7 +103,7 @@ app.loadStoredConfig = function () {
     app.configure.cmdUdpPort = cmdUdpPort ?? null;
   }
 
-  // refletir nos inputs UDP
+  // Reflete na UI (input UDP mostra IP/porta locais)
   for (const c of (app.connections || [])) {
     const inputs = c.inputs || c.dataInputs || c.inputsList || [];
     for (const input of inputs) {
@@ -112,11 +111,9 @@ app.loadStoredConfig = function () {
         if (app.$set) {
           if (udpAddress) app.$set(input, 'address', udpAddress);
           if (udpPort != null) app.$set(input, 'port', udpPort);
-          if (input.connected === undefined) app.$set(input, 'connected', false);
         } else {
           if (udpAddress) input.address = udpAddress;
           if (udpPort != null) input.port = udpPort;
-          if (input.connected === undefined) input.connected = false;
         }
       }
     }
@@ -126,7 +123,6 @@ app.loadStoredConfig = function () {
 /* ======================= Conectar (REMOTO) ======================= */
 
 app.createConnection = function () {
-  // Campo de entrada no modal deve estar em this.newConnectionAddress (host:porta)
   const parsed = parseHostPort(this.newConnectionAddress);
   if (!parsed) {
     alert("Use o formato host:porta (ex.: 192.168.0.50:47268) — este é o destino REMOTO de comandos.");
@@ -134,7 +130,7 @@ app.createConnection = function () {
   }
   const { host, port } = parsed;
 
-  // Atualiza remoteAddress/cmdUdpPort SOMENTE aqui
+  // Atualiza config remota + persiste
   if (this.$set) {
     this.$set(this.configure, 'remoteAddress', host);
     this.$set(this.configure, 'cmdUdpPort', port);
@@ -144,14 +140,15 @@ app.createConnection = function () {
   }
   persistRemoteCmd(host, port);
 
-  // Envia CONNECT:<IP_LOCAL>:<UDP_PORT> ao remoto (cmdUdpPort)
+  // Envia CONNECT:<IP_LOCAL>:<UDP_PORT> para REMOTO:CMD_UDP_PORT
   const localIP = this.configure.udpAddress || '127.0.0.1';
   const localPort = Number(this.configure.udpPort || 0);
   const payload = `CONNECT:${localIP}:${localPort}`;
-  console.log("[UDP] sending handshake:", payload, "to", host, ":", port);
-  if (vscode) vscode.postMessage({ data: payload });
+  if (vscode) {
+    vscode.postMessage({ data: payload });
+  }
 
-  // Enquanto aguarda, marca todos os UDP como "desconectados"
+  // Marca "connecting": zera connected e inicia timeout
   for (const c of (this.connections || [])) {
     const inputs = c.inputs || c.dataInputs || c.inputsList || [];
     for (const input of inputs) {
@@ -167,6 +164,7 @@ app.createConnection = function () {
   app.handshake.pending = true;
   app.handshake.timer = setTimeout(() => {
     app.handshake.pending = false;
+    // opcional: feedback na UI
     console.warn("Handshake timeout: não recebemos OK do remoto.");
   }, app.handshake.timeoutMs);
 
@@ -175,46 +173,33 @@ app.createConnection = function () {
   this.newConnectionAddress = "";
 };
 
-/* ============ Utilitário: marcar conexão UDP nos inputs ============ */
-function setAllUdpConnected(flag) {
-  for (const c of (app.connections || [])) {
-    const inputs = c.inputs || c.dataInputs || c.inputsList || [];
-    for (const input of inputs) {
-      if (input && input.type === 'UDP') {
-        if (app.$set) app.$set(input, 'connected', !!flag);
-        else input.connected = !!flag;
-      }
-    }
-  }
-}
-
 /* =================== Recepção do Host/Servidor =================== */
 
 window.addEventListener('message', (event) => {
   const msg = event.data || {};
 
-  // Config inicial — NÃO sobrescrever remoteAddress
+  // Config inicial do host
   if (msg.type === 'initConfig') {
     const udpAddress = msg.udpAddress || '';
     const udpPort = (msg.udpPort != null) ? Number(msg.udpPort) : null;
+    const remoteAddress = msg.remoteAddress || app.configure.remoteAddress || '';
     const cmdUdpPort = (msg.cmdUdpPort != null)
       ? Number(msg.cmdUdpPort)
       : (app.configure.cmdUdpPort != null ? Number(app.configure.cmdUdpPort) : null);
 
-    // Atualiza apenas os campos locais
     if (app.$set) {
       app.$set(app.configure, 'udpAddress', udpAddress || '');
       app.$set(app.configure, 'udpPort', udpPort ?? null);
-      // remoteAddress: mantido conforme regra solicitada
+      app.$set(app.configure, 'remoteAddress', remoteAddress || '');
       app.$set(app.configure, 'cmdUdpPort', cmdUdpPort ?? null);
     } else {
       app.configure.udpAddress = udpAddress || '';
       app.configure.udpPort = udpPort ?? null;
-      // remoteAddress: mantido
+      app.configure.remoteAddress = remoteAddress || '';
       app.configure.cmdUdpPort = cmdUdpPort ?? null;
     }
 
-    // Reflete nos inputs UDP
+    // Reflete no input UDP local
     for (const c of (app.connections || [])) {
       const inputs = c.inputs || c.dataInputs || c.inputsList || [];
       for (const input of inputs) {
@@ -222,52 +207,50 @@ window.addEventListener('message', (event) => {
           if (app.$set) {
             if (udpAddress) app.$set(input, 'address', udpAddress);
             if (udpPort != null) app.$set(input, 'port', udpPort);
-            if (input.connected === undefined) app.$set(input, 'connected', false);
           } else {
             if (udpAddress) input.address = udpAddress;
             if (udpPort != null) input.port = udpPort;
-            if (input.connected === undefined) input.connected = false;
           }
         }
       }
     }
 
     persistLocalUdp(udpAddress || '', udpPort ?? null);
-    // remoteAddress fica como já estava (somente createConnection altera)
-    if (cmdUdpPort != null) {
-      // manter cmdUdpPort persistido caso venha do host
-      persistRemoteCmd(app.configure.remoteAddress || '', cmdUdpPort);
+    if (remoteAddress || cmdUdpPort != null) {
+      persistRemoteCmd(remoteAddress || '', cmdUdpPort ?? null);
     }
     return;
   }
 
-  // Dados do host (inclui handshake textual via UDP repassado pela extensão)
+  // Dados vindos do host (UDP -> extensão -> webview)
   if (typeof msg.data === 'string') {
+    // Verifica handshake OK
     const lines = msg.data.split(/\r?\n/);
     for (const line of lines) {
       if (!line) continue;
-
-      // Handshake OK
       if (line.startsWith('CONNECTED:')) {
-        // Formato: CONNECTED:<IP_REMOTO>:<CMD_UDP_PORT>
+        // Formato esperado: CONNECTED:<IP_REMOTO>:<CMD_UDP_PORT>
         const parts = line.split(':');
         const okIP = parts[1] || '';
         const okPort = Number(parts[2] || NaN);
-        console.log("[UDP] CONNECTED do host:", okIP, okPort);
 
-        clearTimeout(app.handshake.timer);
-        app.handshake.pending = false;
+        if (app.handshake.pending) {
+          const exp = app.handshake.expected;
+          // Se quiser validar IP/porta, pode comparar com exp
+          // Aqui aceitamos qualquer OK e marcamos como connected
+          clearTimeout(app.handshake.timer);
+          app.handshake.pending = false;
 
-        // NÃO alterar remoteAddress aqui (regra pedida). Só marcar conectado.
-        setAllUdpConnected(true);
-        continue;
-      }
-
-      // Desconectado
-      if (line.startsWith('DISCONNECTED:')) {
-        console.log("[UDP] DISCONNECTED do host:", line);
-        setAllUdpConnected(false);
-        continue;
+          for (const c of (app.connections || [])) {
+            const inputs = c.inputs || c.dataInputs || c.inputsList || [];
+            for (const input of inputs) {
+              if (input && input.type === 'UDP') {
+                if (app.$set) app.$set(input, 'connected', true);
+                else input.connected = true;
+              }
+            }
+          }
+        }
       }
     }
   }
@@ -277,10 +260,8 @@ window.addEventListener('message', (event) => {
 
 app.loadStoredConfig();
 
-// Atualização de view (mantém seu ritmo original)
 setInterval(updateView, 1000 / widgetFPS);
 
-// Conexões: VSCode vs Websocket
 if (vscode) {
   let conn = new ConnectionLasecPlotVSCode();
   conn.connect();
@@ -301,7 +282,6 @@ if (vscode) {
   }
 }
 
-// Atualiza lista de comandos periodicamente (comportamento original)
 setInterval(() => {
   for (let conn of app.connections) {
     conn.updateCMDList();

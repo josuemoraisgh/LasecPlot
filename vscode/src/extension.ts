@@ -50,7 +50,7 @@ function getConfig() {
 function updateStatusBar(udpPort: number, cmdUdpPort: number) {
   if (!statusBarIcon) return;
   statusBarIcon.text = `$(graph-line) LasecPlot`;
-  statusBarIcon.tooltip = `UDP ${udpPort} • CMD ${cmdUdpPort}`;
+  statusBarIcon.tooltip = `UDP-Send: ${cmdUdpPort} • UDP-Recive: ${udpPort}`;
   statusBarIcon.show();
 }
 

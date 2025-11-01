@@ -15,6 +15,7 @@
     <script>
         var _lasecplot_default_color_style = "light";
     </script>
+
 </head>
 
 <body>
@@ -33,11 +34,8 @@
                                     @click="conn.createInput('serial')">🞢 New Serial</span>
                             </div>
                         </div>
-
                         <div class="connection-input-container">
                             <div v-for="input in conn.inputs" class="connection-input">
-
-                                <!-- SERIAL -->
                                 <div v-if="input.type=='serial'">
                                     <div class="connection-input-header">
                                         <span class="connection-input-name">{{input.name}}</span>
@@ -45,24 +43,14 @@
                                             style="cursor: pointer;font-size: 6px;">╳</span>
                                     </div>
                                 </div>
-
-                                <!-- UDP -->
                                 <div v-if="input.type=='UDP'">
                                     <div class="connection-input-header">
                                         <span class="connection-input-name">UDP-Send: {{configure.cmdUdpPort}}</span>
                                     </div>
-
-                                    <!-- AGORA BASEADO EM input.connected + mostra configure.remoteAddress quando conectado -->
-                                    <div v-if="configure.remoteAddress && configure.remoteAddress !== '127.0.0.1'" class="connection-input-status-connected">
-                                        Connected: {{configure.remoteAddress}}
-                                    </div>
-                                    <div v-else class="connection-input-status-not-connected">
-                                        Not connected
-                                    </div>
+                                    <div v-if="configure.remoteAddress=='127.0.0.1'" class="connection-input-status-connected">{{configure.remoteAddress}}</div>
+                                    <div v-if="configure.remoteAddress!='127.0.0.1'" class="connection-input-status-not-connected">Not connected</div>
                                 </div>
-
-                                <!-- PARAMS SERIAL -->
-                                <div v-if="input.type=='serial' " class="connection-serial-input">
+                                <div v-if="input.type=='serial'" class="connection-serial-input">
                                     <div class="connection-serial-input-params">
                                         <!--Port-->
                                         <select v-if="!input.connected" v-model="input.port" style="min-width: 6em;">
@@ -98,12 +86,9 @@
                                             style="margin-left: 5px">Close</button>
                                     </div>
                                 </div>
-
                             </div>
                         </div>
                     </div>
-
-                    <!-- NOVA CONEXÃO (REMOTA) -->
                     <div class="connection-new-container">
                         <button v-if="!creatingConnection" @click="creatingConnection=true"
                             class="connection-new-plus-button" title="Add a new connection">🞢</button>
@@ -117,7 +102,6 @@
                     </div>
                 </div>
             </div>
-
             <div v-if="dataAvailable" class="flex-row" style="align-items: center;">
                 <button @click="isViewPaused = !isViewPaused" class="header-button play-pause-button"
                     style="width:34px;height:34px" v-bind:class="{ 'play-pause-button-paused': isViewPaused }">
@@ -184,7 +168,6 @@
                         title="Switch to light colors">light mode</a>
                 </div>
             </div>
-
             <div v-else>
                 <label for="session-json-input" class="header-button" title="Open a past session from a .json file">🗁
                     Open JSON</label>
@@ -202,6 +185,7 @@
             <div class="left-col var-container" v-if="dataAvailable && leftPanelVisible">
                 <button @click="showLeftPanel(false)" class="left-reduce-btn" title="Reduce left panel">Reduce</button>
 
+
                 <div class="new-chart-drop-zone" v-bind:class="{ 'new-chart-drop-zone-over': newChartDropZoneOver }"
                     @drop="onDropInNewChart($event)" @dragover="onNewChartDragOver($event)" @dragenter.prevent
                     @dragleave="onNewChartDragLeave($event)">
@@ -214,8 +198,8 @@
                 </div>
                 <input type="text" placeholder="Telemetry filter (ex: a*c* )" v-model="telemetryFilterString" />
 
-                <div v-for="telem in telemetries" v-bind:key="'var-'+telem.name"
-                    v-if="isMatchingTelemetryFilter(telem.name) || isMatchingTelemetryFilter(telem.type) || 
+
+                <div v-for="telem in telemetries" v-bind:key="'var-'+telem.name" v-if="isMatchingTelemetryFilter(telem.name) || isMatchingTelemetryFilter(telem.type) || 
                     isMatchingTelemetryFilter(telem.unit)" class="var-vue" draggable
                     @dragstart="onDragTelemetry($event, telem.name)">
                     <div class="var-vue-name">
@@ -230,13 +214,15 @@
                 <div style="text-align: center;color: #bdc3c7;">Drag on chart for<br /> multi-series</div>
             </div>
 
+
+
+
             <div class="center-col" @drop="onDropInNewChart($event, false)" @dragenter.prevent
                 @dragover="onNewChartDragOver($event)" @dragenter.prevent @dragleave="onNewChartDragLeave($event)">
                 <div v-if="!dataAvailable" class="help-container">
                     <img src="./images/logo-color.svg" />
                     <span>Ready to plot incoming telemetry.</span>
                 </div>
-
                 <!-- WIDGETS -->
                 <div class="widget-container" id="widget-container-div">
                     <div v-for="widget in widgets" v-bind:key="widget.id" class="widget-vue"
@@ -244,13 +230,15 @@
                         @dragover="onWidgetDragOver($event, widget)" @dragenter.prevent
                         @dragleave="onWidgetDragLeave($event, widget)"
                         v-bind:style="{'grid-area': `span ${widget.gridPos.h} / span ${widget.gridPos.w}`}">
-
+                        <!--Header-->
                         <div class="widget-vue-header">
-                            <div class="flex-row" v-bind:class="{ 'flex-col': isWidgetSmallOnGrid(widget) }"></div>
+                            <div class="flex-row" v-bind:class="{ 'flex-col': isWidgetSmallOnGrid(widget) }">
 
+                            </div>
                             <div class="serie-header-container">
                                 <div v-for="serie of widget.series" class="serie-header"
                                     v-bind:class="{ 'serie-header-small': isWidgetSmallOnGrid(widget) }">
+
                                     <div v-if="widget.type == 'chart' || widget.type == 'widget3D'"
                                         class="serie-name-container">
                                         <span v-if="widget.type == 'chart'" class="serie-color"
@@ -264,13 +252,15 @@
                                             class="serie-remove" @click="removeSerie(widget, serie)"
                                             title="Remove serie">⨯</span>
                                     </div>
-
                                     <div v-if="serie.type == '3D'" class="serie-3d-details-container">
                                         <div v-if="serie.values != undefined && serie.values.length != 0 && serie.values[0] != undefined"
                                             class="serie-3d-details">
-                                            <span class="details-3d-x">x:{{serie.details_3d_formatted.position.x}}</span>
-                                            <span class="details-3d-y">y:{{serie.details_3d_formatted.position.y}}</span>
-                                            <span class="details-3d-z">z:{{serie.details_3d_formatted.position.z}}</span>
+                                            <span
+                                                class="details-3d-x">x:{{serie.details_3d_formatted.position.x}}</span>
+                                            <span
+                                                class="details-3d-y">y:{{serie.details_3d_formatted.position.y}}</span>
+                                            <span
+                                                class="details-3d-z">z:{{serie.details_3d_formatted.position.z}}</span>
                                             <span> | </span>
 
                                             <span v-if="serie.values[0].quaternion == undefined">
@@ -284,9 +274,9 @@
                                                 <span>rz:{{serie.details_3d_formatted.quaternion.z}}</span>
                                                 <span>rw:{{serie.details_3d_formatted.quaternion.w}}</span>
                                             </span>
+
                                         </div>
                                     </div>
-
                                     <div v-if="serie.stats" class="serie-stat-container">
                                         <div class="serie-stat">
                                             <span class="serie-stat-name">Min</span>
@@ -310,17 +300,17 @@
                                         </div>
                                     </div>
 
+
                                 </div>
                             </div>
-
                             <div class="widget-option-container">
                                 <span v-if="widget.type == 'chart'" class="widget-option" @click="updateStats(widget)"
                                     title="Recalculate stats">‱</span>
                                 <span id="closeWidgetButton" class="widget-option" @click="removeWidget(widget)"
                                     title="Close widget">╳</span>
+
                             </div>
                         </div>
-
                         <span class="widget-option-resize" v-on:mousedown="onMouseDownOnResizeButton($event, widget)"
                             title="Resize widget">⇲</span>
 
@@ -333,28 +323,28 @@
                         <uplot-vue class="uplot-vue"
                             v-if="widget.type == 'chart' && !widget.isResized && (!widget.isXY || widget.data_available_xy)"
                             v-bind:data="widget.data" v-bind:options="widget.options" />
+
                     </div>
                 </div>
             </div>
 
             <!-- CMD update to multi input-->
+
             <div class="var-container" v-if="shouldShowRightPanelButton()">
                 <button @click="showRightPanel(true)" class="right-rounded-btn"> < </button>
             </div>
-
             <div class="right-col cmd-container" v-show="rightPanelVisible">
                 <button @click="showRightPanel(false)" class="right-reduce-btn">Reduce</button>
-
                 <div v-for="cmd in commands" v-bind:key="cmd.name" class="cmd-vue">
                     <button @click="sendCmd(cmd)">{{cmd.name}}</button>
                 </div>
 
-                <!-- LOG -->
+                <!-- LOG TODO update to multi input-->
                 <div id="log-container-div" class="log-container"></div>
-
-                <!-- Barra de envio tanto para Serial quanto para UDP -->
                 <div v-for="conn in connections" class="flex-col">
                     <div v-for="input in conn.inputs" class="flex-col">
+
+                        <!-- Barra de envio tanto para Serial quanto para UDP -->
                         <div v-if="(input.type=='serial' && input.port) || (input.type=='UDP' && input.connected)"
                             class="send-text-container">
 
@@ -374,10 +364,11 @@
                                 @click="input.sendText(input.textToSend, input.endlineToSend)" style="max-width: 60px;">
                                 Send
                             </button>
+
                         </div>
                     </div>
-                </div>
 
+                </div>
             </div>
         </div>
     </div>
