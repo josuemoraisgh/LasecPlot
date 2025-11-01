@@ -28,13 +28,13 @@ class DataInputSerial extends DataInput{
             if(msg.cmd == "serialPortList"){
                 this.portList.length = 0;
                 for(let serial of msg.list){
-                    if( serial.locationId
-                     || serial.serialNumber
-                     || serial.pnpId
-                     || serial.vendorId
-                     || serial.productId ){
+                //     if( serial.locationId
+                //      || serial.serialNumber
+                //      || serial.pnpId
+                //      || serial.vendorId
+                //      || serial.productId ){
                         this.portList.push(serial);
-                    }
+                    // }
                 }
             }
             else if(msg.cmd == "serialPortConnect"){
