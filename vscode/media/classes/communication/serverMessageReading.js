@@ -1,44 +1,56 @@
 // parses the message we received from the server
 
-function parseData(msgIn){
+// parses the message we received from the server
+function parseData(msgIn) {
+    if (app.isViewPaused) return; // Do not buffer incoming data while paused
 
-    if(app.isViewPaused) return; // Do not buffer incomming data while paused
-    let now = new Date().getTime();
-
-    const typeStr = (msgIn.input && msgIn.input.type) ? String(msgIn.input.type).toLowerCase() : "";
-    const fromDevice =
-        !!msgIn.fromSerial ||
-        !!msgIn.fromUDP ||
-        typeStr === "serial" ||
-        typeStr === "udp";
-
-    if(fromDevice && typeof msgIn.timestamp === "number" && isFinite(msgIn.timestamp)){
+    // timestamp base
+    let now = Date.now();
+    if (typeof msgIn?.timestamp === "number" && isFinite(msgIn.timestamp)) {
         now = msgIn.timestamp;
     }
+    now /= 1000; // uPlot usa segundos
 
-    now/=1000; // we convert timestamp in seconds for uPlot to work
+    // normaliza em linhas
+    const raw = String(msgIn?.data ?? "");
+    const msgList = raw.split("\n");
 
-    let msgList = (""+msgIn.data).split("\n");
+    for (let msg of msgList) {
+        try {
+            if (!msg) continue;
 
-    for(let msg of msgList){
-        try{
-            if(fromDevice && msg.startsWith(">")) {
-                msg = msg.substring(1); // variable
-            }
-            else if(fromDevice && !msg.startsWith(">")) {
-                msg = ">:"+msg; // log
-            }
-
-            if(msg.startsWith("|"))
+            // 1) comandos e 3D passam direto
+            if (msg.startsWith("|")) {
                 parseCommandList(msg);
-            else if(msg.startsWith(">"))
-                parseLog(msg, now);
-            else if (msg.substring(0,3) == "3D|")
+                continue;
+            }
+            if (msg.startsWith("3D|")) {
                 parse3D(msg, now);
-            else
+                continue;
+            }
+
+            // 2) regra unificada (sem diferenciar serial/udp):
+            //    ">" => variável; caso contrário => log
+            if (msg.startsWith(">")) {
+                // variável: remove o ">" e deixa o restante para os parsers de variável
+                msg = msg.substring(1);
+            } else {
+                // log: adiciona prefixo de log esperado por parseLog (sem timestamp => usa 'now')
+                msg = ">:" + msg;
+            }
+
+            // 3) roteamento final
+            if (msg.startsWith(">")) {
+                // formato de log esperado por parseLog: ">:texto" ou ">1234567890:texto"
+                parseLog(msg, now);
+            } else {
+                // variável/texto/xy
+                // (ex.: "temp:ts:value|flags" ou "status:ts:Ligado|t")
                 parseVariablesData(msg, now);
+            }
+        } catch (e) {
+            console.log("[parseData] erro:", e, "linha:", msg);
         }
-        catch(e){console.log(e)}
     }
 }
 

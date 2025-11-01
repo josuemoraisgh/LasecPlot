@@ -117,7 +117,7 @@ class UdpSineServer:
             value = self.amplitude * math.sin(2.0 * math.pi * self.sine_freq_hz * t)
             ts_ms = int(time.time() * 1000)
 
-            line = f">{self.var_name}:{ts_ms}:{value}|g\n"
+            line = f"{self.var_name}:{ts_ms}:{value}|g\n"
             try:
                 self.data_sock.sendto(line.encode("utf-8"), target)
                 sent += 1
