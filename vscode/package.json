@@ -1,6 +1,6 @@
 {
-  "name": "teleplot",
-  "description": "Teleplot - Ridiculously-simple telemetry viewer.",
+  "name": "lasecplot",
+  "description": "Telemetry viewer.",
   "version": "1.4.1",
   "publisher": "josuemoraisgh",
   "private": true,
