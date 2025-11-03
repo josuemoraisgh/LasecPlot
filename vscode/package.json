@@ -17,16 +17,16 @@
   ],
   "activationEvents": [
     "onStartupFinished",
-    "onCommand:teleplot.start"
+    "onCommand:lasecplot.start"
   ],
   "main": "./out/extension.js",
   "icon": "images/logo-color.png",
   "contributes": {
     "commands": [
       {
-        "command": "teleplot.start",
-        "title": "Start teleplot session",
-        "category": "teleplot",
+        "command": "lasecplot.start",
+        "title": "Start LasecPlot session",
+        "category": "lasecplot",
         "icon": {
           "light": "images/logo-color.svg",
           "dark": "images/logo-color.svg"
