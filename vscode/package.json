@@ -1,92 +1,83 @@
 {
-	"name": "lasecplot",
-	"description": "LasecPlot - Ridiculously-simple telemetry viewer.",
-	"version": "1.2.9",
-	"publisher": "josuemoraisgh",
-	"private": true,
-	"license": "MIT",
-	"repository": {
-		"type": "git",
-		"url": "https://github.com/josuemoraisgh/LasecPlot"
-	},
-	"engines": {
-		"vscode": "^1.47.0"
-	},
-	"categories": [
-		"Other"
-	],
-	"activationEvents": [
-		"onStartupFinished",
-		"onCommand:lasecplot.start",
-		"onWebviewPanel:lasecplot"
-	],
-	"main": "./out/extension.js",
-	"icon": "images/logo-color.png",
-	"contributes": {
-		"commands": [
-			{
-				"command": "lasecplot.start",
-				"title": "Start lasecplot session",
-				"category": "lasecplot",
-				"icon": {
-					"light": "images/logo-color.svg",
-					"dark": "images/logo-color.svg"
-				}
-			}
-		],
-		"configuration": {
-			"title": "LasecPlot",
-			"properties": {
-				"lasecplot.udpAddress": {
-					"type": "string",
-					"default": "127.0.0.1",
-					"description": "IP local (LP) para entrada de dados."
-				},
-				"lasecplot.udpPort": {
-					"type": "number",
-					"default": 47269,
-					"description": "Porta UDP local (LP) para dados."
-				},
-				"lasecplot.remoteAddress": {
-					"type": "string",
-					"default": "0.0.0.0",
-					"description": "IP remoto para comandos (destino CMD)."
-				},
-				"lasecplot.cmdUdpPort": {
-					"type": "number",
-					"default": 47268,
-					"description": "Porta UDP remota para comandos (CMD)."
-				}
+  "name": "teleplot",
+  "description": "Teleplot - Ridiculously-simple telemetry viewer.",
+  "version": "1.1.4",
+  "publisher": "alexnesnes",
+  "private": true,
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/nesnes/teleplot"
+  },
+  "engines": {
+    "vscode": "^1.94.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished",
+    "onCommand:teleplot.start"
+  ],
+  "main": "./out/extension.js",
+  "icon": "images/logo-color.png",
+  "contributes": {
+    "commands": [
+      {
+        "command": "teleplot.start",
+        "title": "Start teleplot session",
+        "category": "teleplot",
+        "icon": {
+          "light": "images/logo-color.svg",
+          "dark": "images/logo-color.svg"
+        }
+      }
+    ],
+	"configuration": {
+		"title": "LasecPlot",
+		"properties": {
+			"lasecplot.udpPort": {
+				"type": "number",
+				"default": 47269,
+				"description": "Porta UDP local (LP) para dados."
 			}
 		}
-	},
-	"scripts": {
-		"vscode:prepublish": "echo Dont forget to run extension first so source files are updated by pre_launch task && npm run compile",
-		"compile": "tsc -p ./",
-		"rebuild:native-modules": "node ./node_modules/electron-rebuild/lib/cli.js --version 1.4.13",
-		"lint": "eslint . --ext .ts,.tsx",
-		"watch": "tsc -w -p ./"
-	},
-	"dependencies": {
-		"dgram": "^1.0.1",
-		"node-usb-native": "^0.0.20",
-		"serialport": "^10.4.0",
-		"vsce": "^2.9.2"
-	},
-	"devDependencies": {
-		"@types/node": "^20.19.24",
-		"@types/vscode": "^1.47.0",
-		"@types/vscode-webview": "^1.57.0",
-		"@typescript-eslint/eslint-plugin": "^4.16.0",
-		"@typescript-eslint/parser": "^4.16.0",
-		"electron-prebuilt": "1.4.13",
-		"electron-rebuild": "^3.2.3",
-		"eslint": "^7.21.0",
-		"typescript": "^4.4.3"
-	},
-	"__metadata": {
-		"installedTimestamp": 1761953517273,
-		"targetPlatform": "undefined",
-		"size": 44222209
 	}
+},
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "lint": "eslint . --ext .ts",
+    "watch": "tsc -w -p ./",
+    "test": "node ./out/test/runTests.js",
+    "package": "vsce package",
+    "publish": "vsce publish"
+  },
+  "dependencies": {
+    "serialport": "^12.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.10",
+    "@types/vscode": "^1.94.0",
+    "@types/vscode-webview": "^1.57.0",
+    "@typescript-eslint/eslint-plugin": "^8.11.0",
+    "@typescript-eslint/parser": "^8.11.0",
+    "eslint": "^9.13.0",
+    "typescript": "^5.6.3",
+    "@vscode/test-electron": "^2.4.0",
+    "@vscode/vsce": "^3.1.0"
+  },
+  "__metadata": {
+    "installedTimestamp": 1762004166236,
+    "targetPlatform": "undefined",
+    "size": 25843053
+  },
+  "files": [
+    "out",
+    "media",
+    "images",
+    "README.md",
+    "LICENSE.txt",
+    "package.json"
+  ]
 }

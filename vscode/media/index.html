@@ -25,7 +25,7 @@
                 <div class="connection-container">
                     <div v-for="conn in connections" class="connection">
                         <div class="connection-header">
-                            <span class="connection-name">UDP-Recive: {{configure.udpPort}}</span>
+                            <span class="connection-name">UDP-Recive: {{configure.localIP}}:{{configure.udpPort}}</span>
                             <span v-if="conn.type!='lasecplot-vscode'" @click="removeConnection(conn)"
                                 style="cursor: pointer;font-size: 8px;" title="Remove connection">╳</span>
                             <div class="connection-button-container">
@@ -47,17 +47,44 @@
                                 </div>
 
                                 <!-- UDP -->
-                                <div v-if="input.type=='UDP'">
+                                <div v-if="input.type === 'UDP'">
                                     <div class="connection-input-header">
-                                        <span class="connection-input-name">UDP-Send: {{configure.cmdUdpPort}}</span>
+                                        <template v-if="creatingConnection">
+                                            <input v-on:keyup.enter="createConnection()" type="text"
+                                                placeholder="IP of LasecPlot server" v-model="newConnectionAddress"
+                                                title="IP on which LasecPlot should try to connect" />
+                                        </template>
+                                        <template v-else>
+                                            <span v-if="input.connected && configure.remoteAddress"
+                                                class="connection-input-name">
+                                                UDP-Send: {{ configure.remoteAddress }}:{{ configure.cmdUdpPort }}
+                                            </span>
+                                            <span v-else class="connection-input-status-not-connected">
+                                                Not connected
+                                            </span>
+                                        </template>
                                     </div>
 
-                                    <!-- AGORA BASEADO EM input.connected + mostra configure.remoteAddress quando conectado -->
-                                    <div v-if="input.connected && configure.remoteAddress !== ''" class="connection-input-status-connected">
-                                        Connected: {{configure.remoteAddress}}
-                                    </div>
-                                    <div v-else class="connection-input-status-not-connected">
-                                        Not connected
+                                    <!-- Ações (baseado em creatingConnection) -->
+                                    <div class="connection-actions">
+                                        <template v-if="creatingConnection">
+                                            <button @click="createConnection(); creatingConnection = false"
+                                                title="Connect to new teleplot server">
+                                                Open
+                                            </button>
+                                            <button @click="handleCancel()" title="Cancel new connection">
+                                                Close
+                                            </button>
+                                        </template>
+                                        <template v-else>
+                                            <button @click="creatingConnection = true"
+                                                title="Connect to new teleplot server">
+                                                Udate
+                                            </button>
+                                            <button @click="handleCancel()" title="Cancel">
+                                                Close
+                                            </button>
+                                        </template>
                                     </div>
                                 </div>
 
@@ -103,7 +130,7 @@
                         </div>
                     </div>
 
-                    <!-- NOVA CONEXÃO (REMOTA) -->
+                    <!-- NOVA CONEXÃO (REMOTA)
                     <div class="connection-new-container">
                         <button v-if="!creatingConnection" @click="creatingConnection=true"
                             class="connection-new-plus-button" title="Add a new connection">🞢</button>
@@ -114,7 +141,7 @@
                             <button @click="createConnection()" title="Connect to new telepot server">Connect</button>
                             <button @click="creatingConnection=false" title="Cancel new connection">Cancel</button>
                         </div>
-                    </div>
+                    </div> -->
                 </div>
             </div>
 
@@ -214,8 +241,7 @@
                 </div>
                 <input type="text" placeholder="Telemetry filter (ex: a*c* )" v-model="telemetryFilterString" />
 
-                <div v-for="telem in telemetries" v-bind:key="'var-'+telem.name"
-                    v-if="isMatchingTelemetryFilter(telem.name) || isMatchingTelemetryFilter(telem.type) || 
+                <div v-for="telem in telemetries" v-bind:key="'var-'+telem.name" v-if="isMatchingTelemetryFilter(telem.name) || isMatchingTelemetryFilter(telem.type) || 
                     isMatchingTelemetryFilter(telem.unit)" class="var-vue" draggable
                     @dragstart="onDragTelemetry($event, telem.name)">
                     <div class="var-vue-name">
@@ -268,9 +294,12 @@
                                     <div v-if="serie.type == '3D'" class="serie-3d-details-container">
                                         <div v-if="serie.values != undefined && serie.values.length != 0 && serie.values[0] != undefined"
                                             class="serie-3d-details">
-                                            <span class="details-3d-x">x:{{serie.details_3d_formatted.position.x}}</span>
-                                            <span class="details-3d-y">y:{{serie.details_3d_formatted.position.y}}</span>
-                                            <span class="details-3d-z">z:{{serie.details_3d_formatted.position.z}}</span>
+                                            <span
+                                                class="details-3d-x">x:{{serie.details_3d_formatted.position.x}}</span>
+                                            <span
+                                                class="details-3d-y">y:{{serie.details_3d_formatted.position.y}}</span>
+                                            <span
+                                                class="details-3d-z">z:{{serie.details_3d_formatted.position.z}}</span>
                                             <span> | </span>
 
                                             <span v-if="serie.values[0].quaternion == undefined">
@@ -339,7 +368,8 @@
 
             <!-- CMD update to multi input-->
             <div class="var-container" v-if="shouldShowRightPanelButton()">
-                <button @click="showRightPanel(true)" class="right-rounded-btn"> < </button>
+                <button @click="showRightPanel(true)" class="right-rounded-btn">
+                    < </button>
             </div>
 
             <div class="right-col cmd-container" v-show="rightPanelVisible">

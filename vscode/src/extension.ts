@@ -9,11 +9,28 @@ import * as dgram from 'dgram';
 import { SerialPort } from 'serialport';
 import { ReadlineParser } from '@serialport/parser-readline';
 
+// ===== Runtime state for UDP command target (not persisted) =====
+let currentRemoteAddress: string = '0.0.0.0';
+let currentCmdPort: number = 0;
+
+function getLocalIPv4(): string {
+  try {
+    const nets = os.networkInterfaces() as Record<string, os.NetworkInterfaceInfo[]>;
+    for (const name of Object.keys(nets)) {
+      const arr = nets[name] || [];
+      for (const n of arr) {
+        if ((n as any).family === 'IPv4' && !(n as any).internal && (n as any).address) {
+          return String((n as any).address);
+        }
+      }
+    }
+  } catch {}
+  return '127.0.0.1';
+}
+
 // ================== CONFIG ==================
 const CONFIG_NS = 'lasecplot';
-const CFG_UDP_ADDRESS = 'udpAddress';
 const CFG_UDP_PORT = 'udpPort';
-const CFG_CMD_UDP_PORT = 'cmdUdpPort';
 
 // ================== TIPOS AUX ==================
 type PortInfoLite = {
@@ -41,20 +58,19 @@ let statusBarIcon: vscode.StatusBarItem;
 // ================== FUNÇÕES DE CONFIG ==================
 function getConfig() {
   const cfg = vscode.workspace.getConfiguration(CONFIG_NS);
-  const udpAddress = cfg.get<string>(CFG_UDP_ADDRESS, '');
   const udpPort = cfg.get<number>(CFG_UDP_PORT, 47269);
-  const cmdUdpPort = cfg.get<number>(CFG_CMD_UDP_PORT, 47268);
-  return { cfg, udpAddress, udpPort, cmdUdpPort };
+  const localIP = getLocalIPv4();
+  return { cfg, udpPort, localIP };
 }
 
-function updateStatusBar(udpPort: number, cmdUdpPort: number) {
+function updateStatusBar(udpPort: number, localIP: string) {
   if (!statusBarIcon) return;
   statusBarIcon.text = `$(graph-line) LasecPlot`;
-  statusBarIcon.tooltip = `UDP-Send: ${cmdUdpPort} • UDP-Recive: ${udpPort}`;
+  statusBarIcon.tooltip = `UDP-Receive: ${localIP}:${udpPort}`;
   statusBarIcon.show();
 }
 
-function bindUdpServer(udpPort: number, cmdUdpPort: number) {
+function bindUdpServer(udpPort: number, localIP: string) {
   if (udpServer) {
     try { udpServer.close(); } catch { /* ignore */ }
     udpServer = null;
@@ -71,27 +87,27 @@ function bindUdpServer(udpPort: number, cmdUdpPort: number) {
   });
 
   udpServer.on('error', (err) => console.error('[UDP] server error:', err));
-  updateStatusBar(udpPort, cmdUdpPort);
+  updateStatusBar(udpPort, localIP);
 }
 
 async function saveAddressPort(address: string, port: number) {
-  const { cfg, udpPort, cmdUdpPort } = getConfig();
-  await cfg.update(CFG_UDP_ADDRESS, address, vscode.ConfigurationTarget.Global);
+  // Deprecated: no longer persisting remote address; only update local udpPort if changed.
+  const { cfg, udpPort, localIP } = getConfig();
   if (udpPort !== port) {
     await cfg.update(CFG_UDP_PORT, port, vscode.ConfigurationTarget.Global);
-    bindUdpServer(port, cmdUdpPort);
+    bindUdpServer(port, localIP);
   } else {
-    updateStatusBar(udpPort, cmdUdpPort);
+    updateStatusBar(udpPort, localIP);
   }
-}
+} 
 
-async function saveCmdPort(port: number) {
-  const { cfg, udpPort, cmdUdpPort } = getConfig();
-  if (cmdUdpPort !== port) {
-    await cfg.update(CFG_CMD_UDP_PORT, port, vscode.ConfigurationTarget.Global);
-    updateStatusBar(udpPort, port);
-  }
-}
+// async function saveCmdPort(port: number) {
+//   const { cfg, udpPort, cmdUdpPort } = getConfig();
+//   if (cmdUdpPort !== port) {
+//     await cfg.update(CFG_CMD_UDP_PORT, port, vscode.ConfigurationTarget.Global);
+//     updateStatusBar(udpPort, port);
+//   }
+// }
 
 // ================== ATIVAÇÃO ==================
 export function activate(context: vscode.ExtensionContext) {
@@ -101,8 +117,8 @@ export function activate(context: vscode.ExtensionContext) {
 
   context.subscriptions.push(
     vscode.commands.registerCommand('lasecplot.start', () => {
-      const { udpAddress, udpPort, cmdUdpPort } = getConfig();
-      bindUdpServer(udpPort, cmdUdpPort);
+      const { udpPort, localIP } = getConfig();
+      bindUdpServer(udpPort, localIP);
 
       const column: vscode.ViewColumn =
         vscode.window.activeTextEditor?.viewColumn ?? vscode.ViewColumn.One;
@@ -151,9 +167,8 @@ export function activate(context: vscode.ExtensionContext) {
         // Envia config inicial
         panel.webview.postMessage({
           type: 'initConfig',
-          udpAddress,
+          localIP,
           udpPort,
-          cmdUdpPort,
         });
       });
 
@@ -187,22 +202,66 @@ export function activate(context: vscode.ExtensionContext) {
         }
 
         // salvar cmd port
-        if (message?.type === 'saveCmdPort') {
-          const portNum = Number(message.port);
-          if (Number.isFinite(portNum)) {
-            await saveCmdPort(portNum);
+        // if (message?.type === 'saveCmdPort') {
+        //   const portNum = Number(message.port);
+        //   if (Number.isFinite(portNum)) {
+        //     await saveCmdPort(portNum);
+        //   }
+        //   return;
+        // }
+
+        // efetivar conexão de comando (udp.connect)
+        if (message?.type === 'udp.connect') {
+          const host = String(message.remoteAddress || '').trim();
+          const portNum = Number(message.cmdUdpPort);
+          if (host && Number.isFinite(portNum) && portNum > 0) {
+            currentRemoteAddress = host;
+            currentCmdPort = portNum;
+
+            // Envia handshake CONNECT:<localIP>:<udpPort> para o remoto
+            try {
+              const udpClient = dgram.createSocket('udp4');
+              const { udpPort, localIP } = getConfig();
+              const payload = Buffer.from(`CONNECT:${localIP}:${udpPort}`);
+              udpClient.send(payload, 0, payload.length, currentCmdPort, currentRemoteAddress, () => {
+                udpClient.close();
+              });
+            } catch (e) {
+              console.error('UDP CONNECT handshake error:', e);
+            }
+          }
+          return;
+        }
+
+        // efetivar desconexão de comando (udp.disconnect)
+        if (message?.type === 'udp.disconnect') {
+          const host = String(message.remoteAddress || '').trim();
+          const portNum = Number(message.cmdUdpPort);
+          if (host && Number.isFinite(portNum) && portNum > 0) {
+            // Envia handshake DISCONNECT:<localIP>:<udpPort> para o remoto
+            try {
+              const udpClient = dgram.createSocket('udp4');
+              const { udpPort, localIP } = getConfig();
+              const payload = Buffer.from(`DISCONNECT:${localIP}:${udpPort}`);
+              udpClient.send(payload, 0, payload.length, portNum, host, () => {
+                udpClient.close();
+              });
+            } catch (e) {
+              console.error('UDP CONNECT handshake error:', e);
+            }
           }
           return;
         }
 
         // enviar payload para endereço/porta de comando
         if ('data' in message) {
-          const { udpAddress: addr, cmdUdpPort: currentCmdPort } = getConfig();
+          const addr = currentRemoteAddress;
+          const portToUse = currentCmdPort;
           const buf: Buffer = Buffer.isBuffer(message.data)
             ? message.data
             : Buffer.from(String(message.data));
           const udpClient = dgram.createSocket('udp4');
-          udpClient.send(buf, 0, buf.length, currentCmdPort, addr || '127.0.0.1', () => {
+          udpClient.send(buf, 0, buf.length, portToUse || 0, (addr && addr !== '0.0.0.0') ? addr : '127.0.0.1', () => {
             udpClient.close();
           });
           return;
@@ -217,8 +276,8 @@ export function activate(context: vscode.ExtensionContext) {
     })
   );
 
-  const { udpPort, cmdUdpPort } = getConfig();
-  updateStatusBar(udpPort, cmdUdpPort);
+  const { udpPort, localIP } = getConfig();
+  updateStatusBar(udpPort, localIP);
   statusBarIcon.show();
 }
 

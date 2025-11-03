@@ -21,7 +21,12 @@ class UdpSineServer:
     Protocolo:
       Cliente -> Servidor (cmd_port): "CONNECT:<CLIENT_LOCAL_IP>:<CLIENT_UDP_PORT>"
       Servidor -> Cliente (<CLIENT_LOCAL_IP>, <CLIENT_UDP_PORT>): "CONNECTED:<SERVER_IP>:<CMD_PORT>"
-      Servidor -> Cliente (<CLIENT_LOCAL_IP>, <CLIENT_UDP_PORT>): "><var>:<ts_ms>:<valor>\n"
+      Servidor -> Cliente (<CLIENT_LOCAL_IP>, <CLIENT_UDP_PORT>): "><var>:<ts_ms>:<valor>\\n"
+
+      [NEW] Desconexão:
+      Cliente -> Servidor (cmd_port): "DISCONNECT"  (ou "DISCONNECT:<CLIENT_LOCAL_IP>:<CLIENT_UDP_PORT>")
+      Servidor -> Cliente (<CLIENT_LOCAL_IP>, <CLIENT_UDP_PORT>): "DISCONNECT:<SERVER_IP>:<CMD_PORT>"
+      E pára os envios (zera _data_target)
     """
     def __init__(self, cmd_port=47268, sine_freq_hz=1.0, send_rate_hz=30.0, amplitude=1.0, var_name="sin", verbose=True):
         self.cmd_port = int(cmd_port)
@@ -63,35 +68,78 @@ class UdpSineServer:
                 if self.verbose:
                     print(f"[CMD] De {addr}: {msg}")
 
-                if not msg.startswith("CONNECT:"):
+                # ---------------- CONNECT ----------------
+                if msg.startswith("CONNECT:"):
+                    parts = msg.split(":")
+                    if len(parts) != 3:
+                        print("[CMD] Formato CONNECT inválido. Esperado: CONNECT:<IP_LOCAL>:<UDP_PORT>")
+                        continue
+
+                    client_ip = parts[1].strip()
+                    try:
+                        client_port = int(parts[2])
+                    except ValueError:
+                        print("[CMD] Porta inválida no CONNECT")
+                        continue
+
+                    server_ip = get_local_ip(client_ip)
+                    ok = f"CONNECTED:{server_ip}:{self.cmd_port}"
+
+                    # OK vai para a porta de DADOS do cliente
+                    try:
+                        self.data_sock.sendto(ok.encode("utf-8"), (client_ip, client_port))
+                        if self.verbose:
+                            print(f"[CMD] >> {ok} para {(client_ip, client_port)}")
+                    except Exception as e:
+                        print(f"[CMD] Falha ao enviar OK: {e}")
+
+                    # define/atualiza destino de dados
+                    with self._target_lock:
+                        self._data_target = (client_ip, client_port)
+
                     continue
 
-                parts = msg.split(":")
-                if len(parts) != 3:
-                    print("[CMD] Formato CONNECT inválido. Esperado: CONNECT:<IP_LOCAL>:<UDP_PORT>")
-                    continue
+                # ---------------- DISCONNECT ----------------  # [NEW]
+                if msg == "DISCONNECT" or msg.startswith("DISCONNECT:"):
+                    # Tenta obter o alvo para resposta:
+                    # 1) se vier "DISCONNECT:<ip>:<port>" usa esse
+                    # 2) senão, usa o _data_target atual (se existir)
+                    target_ip = None
+                    target_port = None
 
-                client_ip = parts[1].strip()
-                try:
-                    client_port = int(parts[2])
-                except ValueError:
-                    print("[CMD] Porta inválida no CONNECT")
-                    continue
+                    if msg.startswith("DISCONNECT:"):
+                        parts = msg.split(":")
+                        if len(parts) == 3:
+                            target_ip = parts[1].strip()
+                            try:
+                                target_port = int(parts[2])
+                            except ValueError:
+                                target_ip, target_port = None, None
 
-                server_ip = get_local_ip(client_ip)
-                ok = f"CONNECTED:{server_ip}:{self.cmd_port}"
+                    if target_ip is None or target_port is None:
+                        with self._target_lock:
+                            if self._data_target is not None:
+                                target_ip, target_port = self._data_target
 
-                # OK vai para a porta de DADOS do cliente
-                try:
-                    self.data_sock.sendto(ok.encode("utf-8"), (client_ip, client_port))
+                    # Envia acuse de "DISCONNECT:<server_ip>:<cmd_port>" e zera o destino
+                    if target_ip is not None and target_port is not None:
+                        server_ip = get_local_ip(target_ip)
+                        bye = f"DISCONNECT:{server_ip}:{self.cmd_port}"
+                        try:
+                            self.data_sock.sendto(bye.encode("utf-8"), (target_ip, target_port))
+                            if self.verbose:
+                                print(f"[CMD] >> {bye} para {(target_ip, target_port)}")
+                        except Exception as e:
+                            print(f"[CMD] Falha ao enviar DISCONNECT: {e}")
+
+                    with self._target_lock:
+                        self._data_target = None  # para transmissão
+
                     if self.verbose:
-                        print(f"[CMD] >> {ok} para {(client_ip, client_port)}")
-                except Exception as e:
-                    print(f"[CMD] Falha ao enviar OK: {e}")
+                        print("[CMD] Cliente desconectado; transmissão pausada.")
+                    continue
 
-                # define/atualiza destino de dados
-                with self._target_lock:
-                    self._data_target = (client_ip, client_port)
+                # (mensagens desconhecidas são ignoradas)
 
         finally:
             self.stop()
@@ -117,8 +165,8 @@ class UdpSineServer:
             value = self.amplitude * math.sin(2.0 * math.pi * self.sine_freq_hz * t)
             ts_ms = int(time.time() * 1000)
 
-            line = f">{self.var_name}:{ts_ms}:{value}|g\n"
-            line += f"{value}\n"
+            line = f">{self.var_name}:{ts_ms}:{value}|g\\n"
+            line += f"{value}\\n"
             try:
                 self.data_sock.sendto(line.encode("utf-8"), target)
                 sent += 1
@@ -155,7 +203,6 @@ class UdpSineServer:
                 pass
 
 def main():
-    import argparse
     ap = argparse.ArgumentParser(description="Servidor UDP (handshake + seno) para LasecPlot")
     ap.add_argument("--cmd-port", type=int, default=47268, help="CMD_UDP_PORT (porta de comandos) [default: 47268]")
     ap.add_argument("--freq", type=float, default=1.0, help="Frequência do seno (Hz) [default: 1.0]")
@@ -175,7 +222,7 @@ def main():
     )
 
     def _sigint(_sig, _frm):
-        print("\n[SIGINT] Encerrando…")
+        print("\\n[SIGINT] Encerrando…")
         srv.stop()
         sys.exit(0)
 
