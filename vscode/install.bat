@@ -9,7 +9,7 @@ npm install
 npm run lint
 
 @REM 4) Compilar
-npm run compile
+	npm run compile
 
 
 @REM npx @vscode/vsce package --target win32-x64

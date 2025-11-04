@@ -51,8 +51,7 @@
                                     <div class="connection-input-header">
                                         <template v-if="creatingConnection">
                                             <input v-on:keyup.enter="createConnection()" type="text"
-                                                placeholder="IP of LasecPlot server" v-model="newConnectionAddress"
-                                                title="IP on which LasecPlot should try to connect" />
+                                                v-model="newConnectionAddress" />
                                         </template>
                                         <template v-else>
                                             <span v-if="input.connected && configure.remoteAddress"
@@ -77,7 +76,7 @@
                                             </button>
                                         </template>
                                         <template v-else>
-                                            <button @click="creatingConnection = true"
+                                            <button @click="updateConnection(); creatingConnection = true"
                                                 title="Connect to new teleplot server">
                                                 Udate
                                             </button>

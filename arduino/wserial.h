@@ -10,8 +10,9 @@
 // Protocolo UDP (lado dispositivo):
 // 1) LasecPlot -> CMD_UDP_PORT:  "CONNECT:<IP_LOCAL_DO_VSCODE>:<UDP_PORT_VSCODE>"
 // 2) Dispositivo -> (<IP_LOCAL>,<UDP_PORT>): "OK:<IP_DO_DISPOSITIVO>:<CMD_UDP_PORT>\n"
-// 3) Telemetria: ">var:timestamp_ms:valor|g\n" para (<IP_LOCAL>,<UDP_PORT>)
-//    Log: ">:timestamp_ms:Mensagem\n"
+// 3) Telemetria:
+//    var: ">var:timestamp_ms:valor|g\n" para (<IP_LOCAL>,<UDP_PORT>)
+//    Log: "timestamp_ms:Mensagem\n"
 
 class WSerial_c
 {
@@ -31,12 +32,13 @@ protected:
   void update();
   void _handleConnectPacket(const String &msg, const IPAddress &senderIP);
   void _handleDisconnectPacket(const String &msg, const IPAddress &senderIP);
-  void _udpSendLine(const String &line);
+  void _sendLine(const String &line);
   static bool _parseHostPort(const String &s, String &host, uint16_t &port);
 
 public:
   void stop();
   void disconnect(); // força o modo Serial (desfaz link UDP) e envia DISCONNECT ao alvo atual
+  void connect();
   friend inline void startWSerial(WSerial_c *ws, unsigned long baudrate = BAUD_RATE, uint16_t cmdUdpPort = 47268) { ws->start(baudrate, cmdUdpPort); }
   friend inline void updateWSerial(WSerial_c *ws) { ws->update(); }
 
@@ -78,7 +80,7 @@ void WSerial_c::disconnect()
     char myIPStr[16];
     snprintf(myIPStr, sizeof(myIPStr), "%u.%u.%u.%u", myIP[0], myIP[1], myIP[2], myIP[3]);
     String bye = String("DISCONNECT:") + String(myIPStr) + String(":") + String(_cmdUdpPort) + String("\n");
-    _udpSendLine(bye);
+    _sendLine(bye);
   }
   // Desfaz link para que tudo volte à Serial
   _udpLinked = false;
@@ -89,23 +91,28 @@ void WSerial_c::start(unsigned long baudrate, uint16_t cmdUdpPort)
 {
   Serial.begin(baudrate);
   while (!Serial)
-  {
     delay(1);
-  } // USB CDC
 
   _cmdUdpPort = cmdUdpPort;
   _udpAvailable = false;
   _udpLinked = false;
   _remoteDataPort = 0;
 
-  if (WiFi.isConnected() && _udp.listen(_cmdUdpPort))
-  {
-    _udpAvailable = true;
-    Serial.printf("[UDP] Listening CMD on %u\n", _cmdUdpPort);
+  connect();
+}
 
-    // Um único handler para CONNECT, DISCONNECT e para comandos UDP -> on_input
-    _udp.onPacket([this](AsyncUDPPacket packet)
-        {
+void WSerial_c::connect()
+{
+  if (WiFi.isConnected())
+  {
+    if (_udp.listen(_cmdUdpPort))
+    {
+      _udpAvailable = true;
+      Serial.printf("[UDP] Listening CMD on %u\n", _cmdUdpPort);
+
+      // Um único handler para CONNECT, DISCONNECT e para comandos UDP -> on_input
+      _udp.onPacket([this](AsyncUDPPacket packet)
+                    {
             String s;
             s.reserve(packet.length() + 1);
             for (size_t i = 0; i < packet.length(); ++i)
@@ -132,9 +139,8 @@ void WSerial_c::start(unsigned long baudrate, uint16_t cmdUdpPort)
                 if (on_input)
                   on_input(std::string(s.c_str()));
               }
-            } 
-         }
-        );
+            } });
+    }
   }
   else
   {
@@ -144,11 +150,12 @@ void WSerial_c::start(unsigned long baudrate, uint16_t cmdUdpPort)
 
 void WSerial_c::update()
 {
+  if (!_udpAvailable)
+    connect();
   // Entrada por Serial (callback on_input)
-  if (Serial.available())
+  if (on_input && Serial.available() && !(_udpLinked && _udpAvailable && _remoteIP && _remoteDataPort != 0))
   {
-    if (on_input)
-      on_input(std::string((Serial.readStringUntil('\n')).c_str()));
+    on_input(std::string((Serial.readStringUntil('\n')).c_str()));
   }
 }
 
@@ -191,7 +198,7 @@ void WSerial_c::_handleConnectPacket(const String &msg, const IPAddress &)
   ok += ":";
   ok += String(_cmdUdpPort);
   ok += "\n";
-  _udpSendLine(ok);
+  _sendLine(ok);
 
   Serial.printf("[UDP] Linked to %s:%u (OK sent)\n", _remoteIP.toString().c_str(), _remoteDataPort);
 }
@@ -207,18 +214,19 @@ void WSerial_c::_handleDisconnectPacket(const String &msg, const IPAddress &)
   ok += ":";
   ok += String(_cmdUdpPort);
   ok += "\n";
-  _udpSendLine(ok);
+  _sendLine(ok);
 
   Serial.printf("[UDP] Linked to %s:%u (OK sent)\n", _remoteIP.toString().c_str(), _remoteDataPort);
 
   disconnect();
 }
 
-void WSerial_c::_udpSendLine(const String &line)
+void WSerial_c::_sendLine(const String &line)
 {
-  if (!_udpLinked || !_udpAvailable || !_remoteIP || _remoteDataPort == 0)
-    return;
-  _udp.writeTo((const uint8_t *)line.c_str(), line.length(), _remoteIP, _remoteDataPort);
+  if (_udpLinked && _udpAvailable && _remoteIP && _remoteDataPort != 0)
+    _udp.writeTo((const uint8_t *)line.c_str(), line.length(), _remoteIP, _remoteDataPort);
+  else
+    Serial.print(line);
 }
 
 bool WSerial_c::_parseHostPort(const String &s, String &host, uint16_t &port)
@@ -237,7 +245,6 @@ bool WSerial_c::_parseHostPort(const String &s, String &host, uint16_t &port)
 }
 
 // === API pública ===
-
 template <typename T>
 void WSerial_c::plot(const char *varName, T y, const char *unit)
 {
@@ -264,26 +271,13 @@ void WSerial_c::plot(const char *varName, TickType_t x, T y, const char *unit)
   }
   str += "|g" NEWLINE;
 
-  if (_udpAvailable && _udpLinked)
-    _udpSendLine(str);
-  else
-    Serial.print(str);
+  _sendLine(str);
 }
 
 template <typename T>
 void WSerial_c::print(const T &data)
 {
-  if (_udpAvailable && _udpLinked)
-  {
-    String s = String(data);
-    if (!s.endsWith(NEWLINE))
-      s += NEWLINE;
-    _udpSendLine(s);
-  }
-  else
-  {
-    Serial.print(data);
-  }
+  _sendLine(String(data));
 }
 
 template <typename T>
@@ -291,29 +285,23 @@ void WSerial_c::println(const T &data)
 {
   String s = String(data);
   s += NEWLINE;
-  print(s);
+  _sendLine(s);
 }
 
 void WSerial_c::println()
 {
-  if (_udpAvailable && _udpLinked)
-    _udpSendLine(String(NEWLINE));
-  else
-    Serial.println();
+  _sendLine(String(NEWLINE));
 }
 
 void WSerial_c::log(const char *text, uint32_t ts_ms)
 {
   if (ts_ms == 0)
     ts_ms = millis();
-  String line = ">:";
-  line += String(ts_ms);
+  String line = String(ts_ms);
   line += ":";
   line += String(text ? text : "");
-  line += "
-          ";
-      if (_udpAvailable && _udpLinked) _udpSendLine(line);
-  else Serial.print(line);
+  line += NEWLINE;
+  _sendLine(line);
 }
 
 #endif

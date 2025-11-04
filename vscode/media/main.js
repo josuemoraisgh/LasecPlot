@@ -172,13 +172,13 @@ window.addEventListener('message', (event) => {
       }
     }
     // Ensure default disconnected state
-    if (app.$set) {
-      if (app.configure.remoteAddress === undefined) app.$set(app.configure, 'remoteAddress', '0.0.0.0');
-      if (app.configure.cmdUdpPort === undefined) app.$set(app.configure, 'cmdUdpPort', 0);
-    } else {
-      if (app.configure.remoteAddress === undefined) app.configure.remoteAddress = '0.0.0.0';
-      if (app.configure.cmdUdpPort === undefined) app.configure.cmdUdpPort = 0;
-    }
+    // if (app.$set) {
+    //   if (app.configure.remoteAddress === undefined) app.$set(app.configure, 'remoteAddress', '0.0.0.0');
+    //   if (app.configure.cmdUdpPort === undefined) app.$set(app.configure, 'cmdUdpPort', 0);
+    // } else {
+    //   if (app.configure.remoteAddress === undefined) app.configure.remoteAddress = '0.0.0.0';
+    //   if (app.configure.cmdUdpPort === undefined) app.configure.cmdUdpPort = 0;
+    // }
     setAllUdpConnected(false);
     return;
   }
@@ -259,6 +259,12 @@ setInterval(() => {
   }
 }, 3000);
 
+app.updateConnection = function(){
+    this.newConnectionAddress = `${this.configure.remoteAddress}:${this.configure.cmdUdpPort}`;
+    this.creatingConnection = true;
+}
+
+
 /* ======================= Conectar (REMOTO) ======================= */
 app.createConnection = function () {
   // Campo de entrada no modal deve estar em this.newConnectionAddress (host:porta)
@@ -319,8 +325,8 @@ app.handleCancel = function () {
     }
     // Marca como desconectado e reseta destino
     setAllUdpConnected(false);
-    this.configure.remoteAddress = '0.0.0.0';
-    this.configure.cmdUdpPort = 0;
+    // this.configure.remoteAddress = '0.0.0.0';
+    // this.configure.cmdUdpPort = 0;
   }
   // Fecha modal e limpa input
   this.creatingConnection = false;
