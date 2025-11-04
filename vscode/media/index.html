@@ -69,19 +69,19 @@
                                         <template v-if="creatingConnection">
                                             <button @click="createConnection(); creatingConnection = false"
                                                 title="Connect to new teleplot server">
-                                                Open
+                                                Connect
                                             </button>
                                             <button @click="handleCancel()" title="Cancel new connection">
-                                                Close
+                                                Disconnect
                                             </button>
                                         </template>
                                         <template v-else>
                                             <button @click="updateConnection(); creatingConnection = true"
                                                 title="Connect to new teleplot server">
-                                                Udate
+                                                Change
                                             </button>
                                             <button @click="handleCancel()" title="Cancel">
-                                                Close
+                                                Disconnect
                                             </button>
                                         </template>
                                     </div>

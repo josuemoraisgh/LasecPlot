@@ -44,7 +44,12 @@
         for (let msg of msgList) {
             try {
                 if (!msg) continue;
-
+                
+                // *** NOVO: comandos de UI vindos por UDP, prefixados com ":" ***
+                if (msg.startsWith(":")) {
+                    handleUiControl(msg.substring(1)); // tira o ':'
+                    continue;
+                }
                 // 1) comandos e 3D passam direto
                 if (msg.startsWith("|")) {
                     parseCommandList(msg);
@@ -78,6 +83,73 @@
                 console.log("[parseData] erro:", e, "linha:", msg);
             }
         }
+    }
+    
+    function handleUiControl(line) {
+        // "line" já vem sem o ":" inicial
+        // Exemplo: "CONNECT:192.168.0.50:47268"
+        const parts = String(line).split(":");
+        const cmd = (parts[0] || "").toUpperCase();
+
+        if (!window.app) {
+            console.warn("[handleUiControl] app não está definido");
+            return;
+        }
+
+        // :CONNECT:<host>:<port>
+        if (cmd === "CONNECT") {
+            const host = parts[1] || "";
+            const port = Number(parts[2] || 0);
+
+            if (!host || !Number.isFinite(port) || port <= 0) {
+                console.warn("[handleUiControl] CONNECT inválido:", line);
+                return;
+            }
+
+            const addrStr = `${host}:${port}`;
+
+            // atualiza newConnectionAddress
+            if (app.$set) {
+                app.$set(app, "newConnectionAddress", addrStr);
+            } else {
+                app.newConnectionAddress = addrStr;
+            }
+
+            // chama createConnection (usa toda a lógica que você já tem em main.js)
+            if (typeof app.createConnection === "function") {
+                app.createConnection();
+            } else {
+                console.warn("[handleUiControl] app.createConnection não é função");
+            }
+            return;
+        }
+
+        // :DISCONNECT
+        if (cmd === "DISCONNECT") {
+            if (typeof app.handleCancel === "function") {
+                app.handleCancel();
+            } else {
+                console.warn("[handleUiControl] app.handleCancel não é função");
+            }
+            return;
+        }
+
+        // :SETADDR:<host>:<port> (opcional, se quiser só mudar o campo)
+        if (cmd === "SETADDR") {
+            const host = parts[1] || "";
+            const port = Number(parts[2] || 0);
+            if (!host || !Number.isFinite(port) || port <= 0) return;
+
+            const addrStr = `${host}:${port}`;
+            if (app.$set) {
+                app.$set(app, "newConnectionAddress", addrStr);
+            } else {
+                app.newConnectionAddress = addrStr;
+            }
+            return;
+        }
+
+        console.warn("[handleUiControl] comando de UI desconhecido:", line);
     }
 
     function parseCommandList(msg) // a String containing a list of commands, ex : "|sayHello|world|"
