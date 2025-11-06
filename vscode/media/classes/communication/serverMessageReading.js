@@ -1,193 +1,231 @@
-    // parses the message we received from the server
-    // function parseData(msgIn) {
-    //     if (app.isViewPaused) return; // Do not buffer incomming data while paused 
-    //     let now = new Date().getTime(); 
-    //     const typeStr = (msgIn.input && msgIn.input.type) ? String(msgIn.input.type).toLowerCase() : ""; 
-    //     const fromDevice = !!msgIn.fromSerial || !!msgIn.fromUDP || typeStr === "serial" || typeStr === "udp"; 
-    //     if (fromDevice && typeof msgIn.timestamp === "number" && isFinite(msgIn.timestamp)) { now = msgIn.timestamp; } 
-    //     now /= 1000; 
-    //     // we convert timestamp in seconds for uPlot to work 
-    //     let msgList = (""+msgIn.data).split("\n"); 
-    //     for(let msg of msgList){ 
-    //         try{ 
-    //             if(fromDevice && msg.startsWith(">")) { 
-    //                 msg = msg.substring(1); // variable
-    //             } 
-    //             else if(fromDevice && !msg.startsWith(">")) { 
-    //                 msg = ">:"+msg; // log 
-    //             } 
-    //             if(msg.startsWith("|")) parseCommandList(msg); 
-    //             else if(msg.startsWith(">")) parseLog(msg, now); 
-    //             else if (msg.substring(0,3) == "3D|") parse3D(msg, now); 
-    //             else parseVariablesData(msg, now); 
-    //         } catch(e){
-    //             console.log(e)
-    //         } 
-    //     } 
-    // }
+// parses the message we received from the server
+// function parseData(msgIn) {
+//     if (app.isViewPaused) return; // Do not buffer incomming data while paused 
+//     let now = new Date().getTime(); 
+//     const typeStr = (msgIn.input && msgIn.input.type) ? String(msgIn.input.type).toLowerCase() : ""; 
+//     const fromDevice = !!msgIn.fromSerial || !!msgIn.fromUDP || typeStr === "serial" || typeStr === "udp"; 
+//     if (fromDevice && typeof msgIn.timestamp === "number" && isFinite(msgIn.timestamp)) { now = msgIn.timestamp; } 
+//     now /= 1000; 
+//     // we convert timestamp in seconds for uPlot to work 
+//     let msgList = (""+msgIn.data).split("\n"); 
+//     for(let msg of msgList){ 
+//         try{ 
+//             if(fromDevice && msg.startsWith(">")) { 
+//                 msg = msg.substring(1); // variable
+//             } 
+//             else if(fromDevice && !msg.startsWith(">")) { 
+//                 msg = ">:"+msg; // log 
+//             } 
+//             if(msg.startsWith("|")) parseCommandList(msg); 
+//             else if(msg.startsWith(">")) parseLog(msg, now); 
+//             else if (msg.substring(0,3) == "3D|") parse3D(msg, now); 
+//             else parseVariablesData(msg, now); 
+//         } catch(e){
+//             console.log(e)
+//         } 
+//     } 
+// }
 
-    // parses the message we received from the server
-    function parseData(msgIn) {
-        if (app.isViewPaused) return; // Do not buffer incoming data while paused
+// parses the message we received from the server
+function parseData(msgIn) {
+    if (app.isViewPaused) return; // Do not buffer incoming data while paused
 
-        // timestamp base
-        let now = new Date().getTime(); 
-        if (typeof msgIn?.timestamp === "number" && isFinite(msgIn.timestamp)) {
-            now = msgIn.timestamp;
-        }
-        now /= 1000; // uPlot usa segundos
+    // timestamp base
+    let now = new Date().getTime();
+    if (typeof msgIn?.timestamp === "number" && isFinite(msgIn.timestamp)) {
+        now = msgIn.timestamp;
+    }
+    now /= 1000; // uPlot usa segundos
 
-        // normaliza em linhas
-        const raw = String(msgIn?.data ?? "");
-        const msgList = raw.split("\n");
+    // normaliza em linhas
+    const raw = String(msgIn?.data ?? "");
+    const msgList = raw.split("\n");
 
-        for (let msg of msgList) {
-            try {
-                if (!msg) continue;
+    for (let msg of msgList) {
+        try {
+            if (!msg) continue;
 
-                // 1) comandos e 3D passam direto
-                if (msg.startsWith("|")) {
-                    parseCommandList(msg);
-                    continue;
-                }
-                if (msg.startsWith("3D|")) {
-                    parse3D(msg, now);
-                    continue;
-                }
-
-                // 2) regra unificada (sem diferenciar serial/udp):
-                //    ">" => variável; caso contrário => log
-                if (msg.startsWith(">")) {
-                    // variável: remove o ">" e deixa o restante para os parsers de variável
-                    msg = msg.substring(1);
-                } else {
-                    // log: adiciona prefixo de log esperado por parseLog (sem timestamp => usa 'now')
-                    msg = ">:" + msg;
-                }
-
-                // 3) roteamento final
-                if (msg.startsWith(">")) {
-                    // formato de log esperado por parseLog: ">:texto" ou ">1234567890:texto"
-                    parseLog(msg, now);
-                } else {
-                    // variável/texto/xy
-                    // (ex.: "temp:ts:value|flags" ou "status:ts:Ligado|t")
-                    parseVariablesData(msg, now);
-                }
-            } catch (e) {
-                console.log("[parseData] erro:", e, "linha:", msg);
+            // 1) comandos e 3D passam direto
+            if (msg.startsWith("|")) {
+                parseCommandList(msg);
+                continue;
             }
-        }
-    }
-
-    function parseCommandList(msg) // a String containing a list of commands, ex : "|sayHello|world|"
-    {
-        let cmdList = msg.split("|");
-        for (let cmd of cmdList) {
-            if (cmd.length == 0) continue;
-            if (cmd.startsWith("_")) continue;
-            if (app.commands[cmd] == undefined) {
-                let newCmd = {
-                    name: cmd
-                };
-                Vue.set(app.commands, cmd, newCmd);
+            if (msg.startsWith("3D|")) {
+                parse3D(msg, now);
+                continue;
             }
-        }
-        if (!app.cmdAvailable && Object.entries(app.commands).length > 0) app.cmdAvailable = true;
 
-    }
-
-    // msg : a String containing a log message, ex : ">:Hello world"
-    // now : a Number representing a timestamp
-    function parseLog(msg, now) {
-
-        let logStart = msg.indexOf(":") + 1;
-
-        let logText = msg.substr(logStart);
-        let logTimestamp = (parseFloat(msg.substr(1, logStart - 2))) / 1000; // /1000 to convert to seconds
-        if (isNaN(logTimestamp) || !isFinite(logTimestamp)) logTimestamp = now;
-
-        logBuffer.push(new Log(logTimestamp, logText));
-    }
-
-
-    function isTextFormatTelemetry(msg) {
-        return (Array.from(msg)).some((mchar) => ((mchar < '0' || mchar > '9') && mchar != '-' && mchar != ':' && mchar != '.' && mchar != ';' && mchar != ',' && mchar != '§'));
-    }
-
-    // msg : a String containing data of a variable, ex : "myValue:1627551892437:1234|g"
-    // now : a Number representing a timestamp 
-    function parseVariablesData(msg, now) {
-        if (!msg.includes(':')) return;
-
-        let startIdx = msg.indexOf(':');
-
-        let keyAndWidgetLabel = msg.substr(0, msg.indexOf(':'));
-
-        if (keyAndWidgetLabel.substring(0, 6) === "statsd") return;
-
-        let [name, widgetLabel] = separateWidgetAndLabel(keyAndWidgetLabel);
-
-        let endIdx = msg.lastIndexOf('|');
-        if (endIdx == -1) endIdx = msg.length;
-
-        let flags = msg.substr(endIdx + 1);
-
-        let isTextFormatTelem = flags.includes('t');
-
-        let unit = "";
-        let unitIdx = msg.indexOf('§');
-        if (unitIdx != -1) {
-            unit = msg.substring(unitIdx + 1, endIdx);
-            endIdx = unitIdx;
-        }
-
-        // Extract values array
-        let values = msg.substring(startIdx + 1, endIdx).split(';')
-        let xArray = [];
-        let yArray = [];
-        let zArray = [];
-        for (let value of values) {
-            /*  All possibilities : 
-    
-                Number timestamp : 
-                    [1627551892437, 1234]
-                Number no timestamp : 
-                    [1234]
-                
-                Text timestamp : 
-                    [1627551892437, Turned On]
-                Text no timestamp : 
-                    [Turned On]
-    
-                xy timestamp : 
-                    [1, 1, 1627551892437]
-                xy no timestamp : 
-                    [1, 1]
-            */
-
-            if (value.length == 0) continue;
-            let dims = value.split(":");
-
-            if (dims.length == 1) {
-                xArray.push(now);
-                yArray.push(isTextFormatTelem ? dims[0] : parseFloat(dims[0]));
+            // 2) regra unificada (sem diferenciar serial/udp):
+            //    ">" => variável; caso contrário => log
+            if (msg.startsWith(">")) {
+                // variável: remove o ">" e deixa o restante para os parsers de variável
+                msg = msg.substring(1);
+            } else {
+                // log: adiciona prefixo de log esperado por parseLog (sem timestamp => usa 'now')
+                msg = ">:" + msg;
             }
-            else if (dims.length == 2) {
-                let v1 = parseFloat(dims[0]);
-                if (!flags.includes("xy")) // in this case, v1 is the timestamp that we convert to seconds
-                    v1 /= 1000;
 
-                xArray.push(v1);
+            // 3) roteamento final
+            if (msg.startsWith(">")) {
+                // formato de log esperado por parseLog: ">:texto" ou ">1234567890:texto"
+                parseLog(msg, now);
+            } else {
+                // variável/texto/xy
+                // (ex.: "temp:ts:value|flags" ou "status:ts:Ligado|t")
+                parseVariablesData(msg, now);
+            }
+        } catch (e) {
+            console.log("[parseData] erro:", e, "linha:", msg);
+        }
+    }
+}
+
+function parseCommandList(msg) // a String containing a list of commands, ex : "|sayHello|world|"
+{
+    let cmdList = msg.split("|");
+    for (let cmd of cmdList) {
+        if (cmd.length == 0) continue;
+        if (cmd.startsWith("_")) continue;
+        if (app.commands[cmd] == undefined) {
+            let newCmd = {
+                name: cmd
+            };
+            Vue.set(app.commands, cmd, newCmd);
+        }
+    }
+    if (!app.cmdAvailable && Object.entries(app.commands).length > 0) app.cmdAvailable = true;
+
+}
+
+// msg : a String containing a log message, ex : ">:Hello world"
+// now : a Number representing a timestamp
+function parseLog(msg, now) {
+
+    let logStart = msg.indexOf(":") + 1;
+
+    let logText = msg.substr(logStart);
+    let logTimestamp = (parseFloat(msg.substr(1, logStart - 2))) / 1000; // /1000 to convert to seconds
+    if (isNaN(logTimestamp) || !isFinite(logTimestamp)) logTimestamp = now;
+
+    logBuffer.push(new Log(logTimestamp, logText));
+}
+
+
+function isTextFormatTelemetry(msg) {
+    return (Array.from(msg)).some((mchar) => ((mchar < '0' || mchar > '9') && mchar != '-' && mchar != ':' && mchar != '.' && mchar != ';' && mchar != ',' && mchar != '§'));
+}
+
+// msg : a String containing data of a variable, ex : "myValue:1627551892437:1234|g"
+// now : a Number representing a timestamp 
+function parseVariablesData(msg, now) {
+    if (!msg.includes(':')) return;
+
+    let startIdx = msg.indexOf(':');
+
+    let keyAndWidgetLabel = msg.substr(0, msg.indexOf(':'));
+
+    if (keyAndWidgetLabel.substring(0, 6) === "statsd") return;
+
+    let [name, widgetLabel] = separateWidgetAndLabel(keyAndWidgetLabel);
+
+    let endIdx = msg.lastIndexOf('|');
+    if (endIdx == -1) endIdx = msg.length;
+
+    let flags = msg.substr(endIdx + 1);
+
+    let isTextFormatTelem = flags.includes('t');
+
+    let unit = "";
+    let unitIdx = msg.indexOf('§');
+    if (unitIdx != -1) {
+        unit = msg.substring(unitIdx + 1, endIdx);
+        endIdx = unitIdx;
+    }
+
+    // Extract values array
+    // All possibilities : 
+    // Number timestamp (single): [1627551892437, 1234]
+    // Number no timestamp (single): [1234]
+    //
+    // Text timestamp (single): [1627551892437, Turned On]
+    // Text no timestamp (single): [Turned On]
+    //
+    // xy timestamp (single): [1, 1, 1627551892437]
+    // xy no timestamp (single): [1, 1]
+    //
+    // Number with timestamps (batch): [ts1:val1;ts2:val2;...]
+    //     >TEMP:1730880000123:24.3;1730880060123:24.5|g
+    //     >TEMP:1730880000123:24.3;1730880060123:24.5§°C|g
+    //
+    // Text with timestamps (batch): [ts1:TEXT1;ts2:TEXT2;...]
+    //   NOTE: for flag 't', ':' and ';' are NOT allowed inside TEXT
+    //   example:
+    //     >STATE:1730880000123:ON;1730880060123:OFF|t
+    //
+    // xy (batch): [x1:y1;x2:y2;...]
+    //   (optionally supports x:y:ts per point)
+    //   examples:
+    //     >CURVE:0:0;1:1;2:4;3:9|xy
+    //     >CURVE:0:0:1730880000123;1:1:1730880060123|xy
+    //
+    // Not supported by design:
+    //   - Number/Text batch WITHOUT timestamps (e.g., >VAR:10;20;30|g) — must use ts:val
+    //
+    // Error handling in batch:
+    //   - Malformed items (e.g., 'ts:' or arbitrary tokens) are skipped and logged
+    //   - No spaces allowed around ':' or ';'
+
+    let values = msg.substring(startIdx + 1, endIdx).split(';')
+    let xArray = [];
+    let yArray = [];
+    let zArray = [];
+    const isBatch = values.length > 1;
+
+    for (let raw of values) {
+        const value = raw; // sem trim: espaços não são permitidos
+        if (value.length === 0) continue;
+
+        const dims = value.split(":");
+
+        // Modo XY: aceita "x:y" e "x:y:ts"
+        if (flags.includes("xy")) {
+            if (dims.length === 2) {
+                xArray.push(parseFloat(dims[0]));
                 yArray.push(isTextFormatTelem ? dims[1] : parseFloat(dims[1]));
                 zArray.push(now);
             }
-            else if (dims.length == 3) {
+            else if (dims.length === 3) {
                 xArray.push(parseFloat(dims[0]));
-                yArray.push(parseFloat(dims[1]));
-                zArray.push(parseFloat(dims[2]) / 1000);// this one is the timestamp we convert to seconds
+                yArray.push(isTextFormatTelem ? dims[1] : parseFloat(dims[1]));
+                zArray.push(parseFloat(dims[2]) / 1000);
             }
+            else {
+                console.error("[telemetry xy] ponto inválido (esperado 'x:y' ou 'x:y:ts'):", value);
+            }
+            continue;
+        }
 
+        // Telemetria texto/número (não-XY)
+        if (dims.length === 1) {
+            // Sem timestamp só é permitido no formato unitário (sem ';')
+            if (isBatch) {
+                console.error("[telemetry] ponto inválido no lote (faltou timestamp):", value);
+                continue;
+            }
+            xArray.push(now);
+            yArray.push(isTextFormatTelem ? dims[0] : parseFloat(dims[0]));
+        }
+        else if (dims.length === 2) {
+            // ts:val (ts em ms)
+            let v1 = parseFloat(dims[0]);
+            if (!isFinite(v1)) { console.error("[telemetry] timestamp inválido:", value); continue; }
+            v1 /= 1000; // ms -> s
+            xArray.push(v1);
+            yArray.push(isTextFormatTelem ? dims[1] : parseFloat(dims[1]));
+            zArray.push(now);
+        }
+        else {
+            console.error("[telemetry] ponto malformado (use 'ts:val'):", value);
         }
         //console.log("name : "+name+", xArray : "+xArray+", yArray : "+yArray+", zArray : "+zArray+", unit : "+unit+", flags : "+flags);
         if (xArray.length > 0) {

@@ -147,8 +147,11 @@ class UdpSineServer:
     def _tx_loop(self):
         dt = 1.0 / self.send_rate_hz
         t0 = time.time()
-        sent = 0
+        sent_points = 0
         last_log = time.time()
+
+        BATCH_SIZE = 10
+        batch_items = []  # lista de strings "TS:VAL"
 
         while not self._stop.is_set():
             # lê destino atual
@@ -160,28 +163,44 @@ class UdpSineServer:
                 time.sleep(0.05)
                 continue
 
-            # gera amostra
+            # gera uma amostra
             t = time.time() - t0
             value = self.amplitude * math.sin(2.0 * math.pi * self.sine_freq_hz * t)
             ts_ms = int(time.time() * 1000)
 
-            line = f">{self.var_name}:{ts_ms}:{value}|g\\n"
-            line += f"{value}\\n"
-            try:
-                self.data_sock.sendto(line.encode("utf-8"), target)
-                sent += 1
-            except Exception as e:
-                print(f"[TX] Erro ao enviar para {target}: {e}")
-                time.sleep(0.2)
+            # acumula no lote
+            batch_items.append(f"{ts_ms}:{value}")
+            sent_points += 1
+
+            # quando bater 10 pontos, envia um pacote
+            if len(batch_items) >= BATCH_SIZE:
+                payload = ";".join(batch_items)
+                line_batch = f">{self.var_name}:{payload}|g\n"
+                try:
+                    # envia LOTE (novo formato)
+                    self.data_sock.sendto(line_batch.encode("utf-8"), target)
+
+                    # --- COMPATIBILIDADE: envia 1 ponto unitário espelho (último do lote) ---
+                    # Isso garante visualização mesmo sem o parser novo.
+                    last_ts_val = batch_items[-1]             # "TS:VAL"
+                    line_single = f">{self.var_name}:{last_ts_val}|g\n"
+                    self.data_sock.sendto(line_single.encode("utf-8"), target)
+                    # ------------------------------------------------------------------------
+
+                except Exception as e:
+                    print(f"[TX] Erro ao enviar para {target}: {e}")
+                    time.sleep(0.2)
+                batch_items.clear()
 
             # log de saúde do envio (1x/seg)
             now = time.time()
             if self.verbose and (now - last_log) >= 1.0:
-                print(f"[TX] destino={target} rate≈{sent/(now-last_log):.1f} msg/s  último_ts={ts_ms}")
-                sent = 0
+                # taxa aproximada em pontos/seg (não mensagens/seg)
+                print(f"[TX] destino={target} rate≈{sent_points/(now-last_log):.1f} pts/s  último_ts={ts_ms}")
+                sent_points = 0
                 last_log = now
 
-            # espera para manter a taxa
+            # espera para manter a taxa de amostragem (pontos por segundo)
             target_dt = dt - 0.001  # pequena folga
             if target_dt > 0:
                 time.sleep(target_dt)
