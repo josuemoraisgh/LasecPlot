@@ -41,6 +41,7 @@ function parseData(msgIn) {
     const raw = String(msgIn?.data ?? "");
     const msgList = raw.split("\n");
 
+<<<<<<< HEAD
     for (let msg of msgList) {
         try {
             if (!msg) continue;
@@ -53,6 +54,130 @@ function parseData(msgIn) {
             if (msg.startsWith("3D|")) {
                 parse3D(msg, now);
                 continue;
+=======
+        for (let msg of msgList) {
+            try {
+                if (!msg) continue;
+                
+                // *** NOVO: comandos de UI vindos por UDP, prefixados com ":" ***
+                if (msg.startsWith(":")) {
+                    handleUiControl(msg.substring(1)); // tira o ':'
+                    continue;
+                }
+                // 1) comandos e 3D passam direto
+                if (msg.startsWith("|")) {
+                    parseCommandList(msg);
+                    continue;
+                }
+                if (msg.startsWith("3D|")) {
+                    parse3D(msg, now);
+                    continue;
+                }
+
+                // 2) regra unificada (sem diferenciar serial/udp):
+                //    ">" => variável; caso contrário => log
+                if (msg.startsWith(">")) {
+                    // variável: remove o ">" e deixa o restante para os parsers de variável
+                    msg = msg.substring(1);
+                } else {
+                    // log: adiciona prefixo de log esperado por parseLog (sem timestamp => usa 'now')
+                    msg = ">:" + msg;
+                }
+
+                // 3) roteamento final
+                if (msg.startsWith(">")) {
+                    // formato de log esperado por parseLog: ">:texto" ou ">1234567890:texto"
+                    parseLog(msg, now);
+                } else {
+                    // variável/texto/xy
+                    // (ex.: "temp:ts:value|flags" ou "status:ts:Ligado|t")
+                    parseVariablesData(msg, now);
+                }
+            } catch (e) {
+                console.log("[parseData] erro:", e, "linha:", msg);
+            }
+        }
+    }
+    
+    function handleUiControl(line) {
+        // "line" já vem sem o ":" inicial
+        // Exemplo: "CONNECT:192.168.0.50:47268"
+        const parts = String(line).split(":");
+        const cmd = (parts[0] || "").toUpperCase();
+
+        if (!window.app) {
+            console.warn("[handleUiControl] app não está definido");
+            return;
+        }
+
+        // :CONNECT:<host>:<port>
+        if (cmd === "CONNECT") {
+            const host = parts[1] || "";
+            const port = Number(parts[2] || 0);
+
+            if (!host || !Number.isFinite(port) || port <= 0) {
+                console.warn("[handleUiControl] CONNECT inválido:", line);
+                return;
+            }
+
+            const addrStr = `${host}:${port}`;
+
+            // atualiza newConnectionAddress
+            if (app.$set) {
+                app.$set(app, "newConnectionAddress", addrStr);
+            } else {
+                app.newConnectionAddress = addrStr;
+            }
+
+            // chama createConnection (usa toda a lógica que você já tem em main.js)
+            if (typeof app.createConnection === "function") {
+                app.createConnection();
+            } else {
+                console.warn("[handleUiControl] app.createConnection não é função");
+            }
+            return;
+        }
+
+        // :DISCONNECT
+        if (cmd === "DISCONNECT") {
+            if (typeof app.handleCancel === "function") {
+                app.handleCancel();
+            } else {
+                console.warn("[handleUiControl] app.handleCancel não é função");
+            }
+            return;
+        }
+
+        // :SETADDR:<host>:<port> (opcional, se quiser só mudar o campo)
+        if (cmd === "SETADDR") {
+            const host = parts[1] || "";
+            const port = Number(parts[2] || 0);
+            if (!host || !Number.isFinite(port) || port <= 0) return;
+
+            const addrStr = `${host}:${port}`;
+            if (app.$set) {
+                app.$set(app, "newConnectionAddress", addrStr);
+            } else {
+                app.newConnectionAddress = addrStr;
+            }
+            return;
+        }
+
+        console.warn("[handleUiControl] comando de UI desconhecido:", line);
+    }
+
+    function parseCommandList(msg) // a String containing a list of commands, ex : "|sayHello|world|"
+    {
+        let cmdList = msg.split("|");
+        for (let cmd of cmdList) {
+            if (cmd.length == 0) continue;
+            if (cmd.startsWith("_")) continue;
+            if (app.commands[cmd] == undefined) {
+                let newCmd = {
+                    name: cmd
+                };
+                Vue.set(app.commands, cmd, newCmd);
+>>>>>>> 26f789aa9e52590094285ae2d4f03f99400f2599
             }
 
             // 2) regra unificada (sem diferenciar serial/udp):
