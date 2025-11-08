@@ -9,8 +9,6 @@ import * as dgram from 'dgram';
 import { SerialPort } from 'serialport';
 import { ReadlineParser } from '@serialport/parser-readline';
 
-import multicastDns from 'multicast-dns';
-
 // ===== Runtime state for UDP command target (not persisted) =====
 let currentRemoteAddress: string = '0.0.0.0';
 let currentCmdPort: number = 0;
@@ -30,38 +28,6 @@ function getLocalIPv4(): string {
   return '127.0.0.1';
 }
 
-async function resolveMdns(hostname: string, timeoutMs = 1500): Promise<string | null> {
-  return new Promise((resolve) => {
-    try {
-      const m = multicastDns();
-      const target = hostname.endsWith('.local') ? hostname : hostname + '.local';
-      let resolved = false;
-
-      const timer = setTimeout(() => {
-        if (!resolved) {
-          m.destroy();
-          resolve(null);
-        }
-      }, timeoutMs);
-
-      m.on('response', (res) => {
-        for (const a of res.answers) {
-          if (a.name === target && a.type === 'A' && a.data) {
-            resolved = true;
-            clearTimeout(timer);
-            m.destroy();
-            resolve(a.data as string);
-            return;
-          }
-        }
-      });
-
-      m.query({ questions: [{ name: target, type: 'A' }] });
-    } catch {
-      resolve(null);
-    }
-  });
-}
 // ================== CONFIG ==================
 const CONFIG_NS = 'lasecplot';
 const CFG_UDP_PORT = 'udpPort';
@@ -152,7 +118,6 @@ export function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(
     vscode.commands.registerCommand('lasecplot.start', () => {
       const { udpPort, localIP } = getConfig();
-      
       bindUdpServer(udpPort, localIP);
 
       const column: vscode.ViewColumn =
@@ -247,24 +212,12 @@ export function activate(context: vscode.ExtensionContext) {
 
         // efetivar conexão de comando (udp.connect)
         if (message?.type === 'udp.connect') {
-          let  host = String(message.remoteAddress || '').trim();
+          const host = String(message.remoteAddress || '').trim();
           const portNum = Number(message.cmdUdpPort);
           if (host && Number.isFinite(portNum) && portNum > 0) {
-            currentCmdPort = portNum;
-            // 🔹 resolve mDNS se necessário
-            if (host.endsWith('.local')) {
-              console.log(`[mDNS] resolving ${host}...`);
-              const resolved = await resolveMdns(host);
-              if (resolved) {
-                console.log(`[mDNS] ${host} resolved to ${resolved}`);
-                host = resolved;
-              } else {
-                console.warn(`[mDNS] Could not resolve ${host}`);
-              }
-            }
-
-            // 🔹 salva o endereço resolvido para futuros envios
             currentRemoteAddress = host;
+            currentCmdPort = portNum;
+
             // Envia handshake CONNECT:<localIP>:<udpPort> para o remoto
             try {
               const udpClient = dgram.createSocket('udp4');
