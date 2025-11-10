@@ -8,12 +8,180 @@ import * as dgram from 'dgram';
 
 import { SerialPort } from 'serialport';
 import { ReadlineParser } from '@serialport/parser-readline';
-
-import multicastDns from 'multicast-dns';
+// IP resolvido quando o endereço é .local (via mDNS 5353 ou fallback 3232)
+let currentResolvedRemoteAddress: string | null = null;
 
 // ===== Runtime state for UDP command target (not persisted) =====
 let currentRemoteAddress: string = '0.0.0.0';
 let currentCmdPort: number = 0;
+
+// ===================== mDNS (UDP 5353) =========================
+// Consulta mDNS minimalista (A record) para <host>.local, sem libs externas.
+async function mdnsResolveA(hostLocal: string, timeoutMs = 1000): Promise<string | null> {
+  if (!/\.local\.?$/i.test(hostLocal)) return null;
+
+  const name = hostLocal.replace(/\.$/, '');
+  const group = '224.0.0.251';
+  const port = 5353;
+
+  function buildQueryQName(qname: string): Buffer {
+    const labels = qname.replace(/\.local$/i, '').split('.');
+    const parts: Buffer[] = [];
+    for (const lb of labels) {
+      const b = Buffer.from(lb, 'utf8');
+      if (!b.length || b.length > 63) continue;
+      parts.push(Buffer.from([b.length]));
+      parts.push(b);
+    }
+    parts.push(Buffer.from([5])); // "local"
+    parts.push(Buffer.from('local', 'ascii'));
+    parts.push(Buffer.from([0x00])); // terminador
+    return Buffer.concat(parts);
+  }
+
+  function buildDnsQuery(host: string): Buffer {
+    const header = Buffer.alloc(12);
+    header.writeUInt16BE(0x0000, 0); // ID
+    header.writeUInt16BE(0x0000, 2); // Flags
+    header.writeUInt16BE(0x0001, 4); // QDCOUNT = 1
+    const qname = buildQueryQName(host);
+    const qtype = Buffer.alloc(2); qtype.writeUInt16BE(0x0001, 0); // A
+    const qclass = Buffer.alloc(2); qclass.writeUInt16BE(0x0001, 0); // IN
+    return Buffer.concat([header, qname, qtype, qclass]);
+  }
+
+  function readName(buf: Buffer, offset: number): { name: string; next: number } {
+    const labels: string[] = [];
+    let i = offset, jumped = false, jumpEnd = -1;
+    while (i < buf.length) {
+      const len = buf[i];
+      if (len === 0) { i += 1; break; }
+      const isPtr = (len & 0xC0) === 0xC0;
+      if (isPtr) {
+        if (i + 1 >= buf.length) break;
+        const ptr = ((len & 0x3F) << 8) | buf[i + 1];
+        if (!jumped) { jumpEnd = i + 2; jumped = true; }
+        i = ptr;
+      } else {
+        const end = i + 1 + len;
+        if (end > buf.length) break;
+        labels.push(buf.slice(i + 1, end).toString('utf8'));
+        i = end;
+      }
+    }
+    return { name: labels.join('.'), next: jumped ? jumpEnd : i };
+  }
+
+  function parseAAnswers(msg: Buffer): string[] {
+    if (msg.length < 12) return [];
+    let off = 12;
+    const qdcount = msg.readUInt16BE(4);
+    const ancount = msg.readUInt16BE(6);
+    for (let q = 0; q < qdcount; q++) {
+      const qn = readName(msg, off); off = qn.next;
+      off += 4; // QTYPE + QCLASS
+    }
+    const ips: string[] = [];
+    for (let a = 0; a < ancount; a++) {
+      const an = readName(msg, off); off = an.next;
+      if (off + 10 > msg.length) break;
+      const type = msg.readUInt16BE(off); off += 2;
+      /* const klass = */ off += 2;
+      /* const ttl   = */ off += 4;
+      const rdlen = msg.readUInt16BE(off); off += 2;
+      const rdataEnd = off + rdlen;
+      if (rdataEnd > msg.length) break;
+      if (type === 0x0001 && rdlen === 4) {
+        const ip = `${msg[off]}.${msg[off + 1]}.${msg[off + 2]}.${msg[off + 3]}`;
+        ips.push(ip);
+      }
+      off = rdataEnd;
+    }
+    return ips;
+  }
+
+  const sock = dgram.createSocket({ type: 'udp4', reuseAddr: true });
+  const query = buildDnsQuery(name);
+  const answers: string[] = [];
+
+  await new Promise<void>((resolve) => {
+    let finished = false;
+    const finish = () => {
+      if (finished) return;
+      finished = true;
+      try { sock.close(); } catch {}
+      resolve();
+    };
+
+    sock.on('error', finish);
+    sock.on('message', (msg) => {
+      const ips = parseAAnswers(msg);
+      for (const ip of ips) if (!answers.includes(ip)) answers.push(ip);
+    });
+
+    sock.on('listening', () => {
+      try { sock.addMembership(group); } catch {}
+      try { sock.setMulticastLoopback(true); } catch {}
+      try { sock.setMulticastTTL(255); } catch {}
+      sock.send(query, 0, query.length, port, group);
+      setTimeout(() => sock.send(query, 0, query.length, port, group), 150);
+      setTimeout(finish, timeoutMs);
+    });
+
+    sock.bind(0);
+  });
+
+  return answers[0] ?? null;
+}
+// ==============================================================
+/**
+ * Descobre IP via broadcast UDP 3232 (variações Arduino/ESP OTA costumam responder).
+ * Tenta casar pelo hostname (sem .local) no payload; se não tiver, retorna o primeiro IP que respondeu.
+ */
+async function discoverOtaIpByUdp3232(targetHostLocal: string, timeoutMs = 1200): Promise<string | null> {
+  const hostnameWanted = targetHostLocal.replace(/\.local\.?$/i, '').toLowerCase();
+  const sock = dgram.createSocket('udp4');
+  const responses: { ip: string; raw: string }[] = [];
+
+  sock.on('listening', () => { try { sock.setBroadcast(true); } catch {} });
+
+  sock.on('message', (msg, rinfo) => {
+    const raw = msg.toString('utf8').trim();
+    const ipMatch = raw.match(/\b(\d{1,3}(?:\.\d{1,3}){3})\b/);
+    const ip = ipMatch?.[1] || rinfo.address;
+    responses.push({ ip, raw });
+  });
+
+  const wait = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
+
+  await new Promise<void>((resolve, reject) => {
+    sock.once('error', reject);
+    sock.bind(0, () => resolve());
+  });
+
+  const probes = [Buffer.from('Arduino'), Buffer.from('DISCOVER')];
+  for (const p of probes) {
+    try { sock.send(p, 3232, '255.255.255.255'); } catch {}
+    await wait(120);
+  }
+
+  await wait(timeoutMs);
+  try { sock.close(); } catch {}
+
+  if (!responses.length) return null;
+  const byHost = responses.find(r => r.raw.toLowerCase().includes(hostnameWanted));
+  return byHost ? byHost.ip : responses[0].ip || null;
+}
+
+async function resolveLocalHostPreferMdnsThenOta(hostLocal: string): Promise<string | null> {
+  // 1) mDNS (5353)
+  const ipMdns = await mdnsResolveA(hostLocal, 1000);
+  if (ipMdns) return ipMdns;
+
+  // 2) fallback OTA/UDP 3232
+  const ipOta = await discoverOtaIpByUdp3232(hostLocal, 1200);
+  return ipOta;
+}
 
 function getLocalIPv4(): string {
   try {
@@ -30,38 +198,6 @@ function getLocalIPv4(): string {
   return '127.0.0.1';
 }
 
-async function resolveMdns(hostname: string, timeoutMs = 1500): Promise<string | null> {
-  return new Promise((resolve) => {
-    try {
-      const m = multicastDns();
-      const target = hostname.endsWith('.local') ? hostname : hostname + '.local';
-      let resolved = false;
-
-      const timer = setTimeout(() => {
-        if (!resolved) {
-          m.destroy();
-          resolve(null);
-        }
-      }, timeoutMs);
-
-      m.on('response', (res) => {
-        for (const a of res.answers) {
-          if (a.name === target && a.type === 'A' && a.data) {
-            resolved = true;
-            clearTimeout(timer);
-            m.destroy();
-            resolve(a.data as string);
-            return;
-          }
-        }
-      });
-
-      m.query({ questions: [{ name: target, type: 'A' }] });
-    } catch {
-      resolve(null);
-    }
-  });
-}
 // ================== CONFIG ==================
 const CONFIG_NS = 'lasecplot';
 const CFG_UDP_PORT = 'udpPort';
@@ -152,7 +288,6 @@ export function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(
     vscode.commands.registerCommand('lasecplot.start', () => {
       const { udpPort, localIP } = getConfig();
-      
       bindUdpServer(udpPort, localIP);
 
       const column: vscode.ViewColumn =
@@ -247,30 +382,36 @@ export function activate(context: vscode.ExtensionContext) {
 
         // efetivar conexão de comando (udp.connect)
         if (message?.type === 'udp.connect') {
-          let  host = String(message.remoteAddress || '').trim();
+          const host = String(message.remoteAddress || '').trim();
           const portNum = Number(message.cmdUdpPort);
+
           if (host && Number.isFinite(portNum) && portNum > 0) {
+            // mantém o que o usuário digitou para a UI
+            currentRemoteAddress = host;
             currentCmdPort = portNum;
-            // 🔹 resolve mDNS se necessário
-            if (host.endsWith('.local')) {
-              console.log(`[mDNS] resolving ${host}...`);
-              const resolved = await resolveMdns(host);
-              if (resolved) {
-                console.log(`[mDNS] ${host} resolved to ${resolved}`);
-                host = resolved;
-              } else {
-                console.warn(`[mDNS] Could not resolve ${host}`);
+            currentResolvedRemoteAddress = null;
+
+            if (/\.local\.?$/i.test(host)) {
+              try {
+                const ip = await resolveLocalHostPreferMdnsThenOta(host);
+                if (ip) {
+                  currentResolvedRemoteAddress = ip;
+                  console.log(`[resolve] ${host} → ${ip} (mDNS/3232)`);
+                } else {
+                  console.warn(`[resolve] Sem resposta para ${host}; usando o host como está.`);
+                }
+              } catch (e) {
+                console.warn(`[resolve] Erro ao resolver ${host}:`, e);
               }
             }
 
-            // 🔹 salva o endereço resolvido para futuros envios
-            currentRemoteAddress = host;
-            // Envia handshake CONNECT:<localIP>:<udpPort> para o remoto
+            // Handshake CONNECT:<localIP>:<udpPort> usando IP se houver
             try {
               const udpClient = dgram.createSocket('udp4');
-              const { udpPort, localIP } = getConfig();
+              const { udpPort, localIP } = getConfig(); // seu helper existente
               const payload = Buffer.from(`CONNECT:${localIP}:${udpPort}`);
-              udpClient.send(payload, 0, payload.length, currentCmdPort, currentRemoteAddress, () => {
+              const targetHost = currentResolvedRemoteAddress ?? currentRemoteAddress;
+              udpClient.send(payload, 0, payload.length, currentCmdPort, targetHost, () => {
                 udpClient.close();
               });
             } catch (e) {
@@ -279,6 +420,7 @@ export function activate(context: vscode.ExtensionContext) {
           }
           return;
         }
+
 
         // efetivar desconexão de comando (udp.disconnect)
         if (message?.type === 'udp.disconnect') {
@@ -302,7 +444,7 @@ export function activate(context: vscode.ExtensionContext) {
 
         // enviar payload para endereço/porta de comando
         if ('data' in message) {
-          const addr = currentRemoteAddress;
+          const addr = currentResolvedRemoteAddress ?? currentRemoteAddress;
           const portToUse = currentCmdPort;
           const buf: Buffer = Buffer.isBuffer(message.data)
             ? message.data

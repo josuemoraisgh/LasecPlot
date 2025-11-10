@@ -63,7 +63,6 @@
     "@typescript-eslint/eslint-plugin": "^8.11.0",
     "@typescript-eslint/parser": "^8.11.0",
     "eslint": "^9.13.0",
-    "multicast-dns": "^7.2.5",
     "typescript": "^5.6.3",
     "@vscode/test-electron": "^2.4.0",
     "@vscode/vsce": "^3.1.0"
