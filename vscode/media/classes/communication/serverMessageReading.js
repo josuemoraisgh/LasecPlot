@@ -153,36 +153,100 @@
     function parseVariablesData(msg, now) {
         if (!msg.includes(':')) return;
 
-        // parte "chave[,label]"
+        // parte "nome[,label]"
         let startIdx = msg.indexOf(':');
         let keyAndWidgetLabel = msg.substring(0, startIdx);
         if (keyAndWidgetLabel.substring(0, 6) === "statsd") return;
 
         let [name, widgetLabel] = separateWidgetAndLabel(keyAndWidgetLabel);
 
-        // flags e (opcional) unidade global "§UN" antes das flags
+        // flags e unidade
         let endIdx = msg.lastIndexOf('|');
         if (endIdx === -1) endIdx = msg.length;
 
         let flags = msg.substring(endIdx + 1);
         let isTextFormatTelem = flags.includes('t');
 
+        // extração de unidade:  §UNIDADE
         let unit = "";
         let unitIdx = msg.indexOf('§');
         if (unitIdx !== -1 && unitIdx < endIdx) {
             unit = msg.substring(unitIdx + 1, endIdx);
-            endIdx = unitIdx; // corta a parte dos valores até antes do '§'
+            endIdx = unitIdx; // corta os valores até antes do '§'
         }
 
-        // valores separados por ';'
+        // valores separados por ";"
         let valuesStr = msg.substring(startIdx + 1, endIdx);
-        let values = valuesStr.split(';'); // sem trim – espaços não são permitidos
+        let values = valuesStr.split(';'); // sem trim – não aceitamos espaços
 
         let xArray = [];
         let yArray = [];
-        let zArray = []; // para xy: zArray = timestamps; para number/text: zArray guarda "now" (compat)
+        let zArray = [];
 
         const isXY = flags.includes("xy");
+
+        // ------------------------------------------------------
+        // 🔥 NOVO: formato compacto com STEP
+        //
+        //   >NOME:PRIMEIRO_TS;STEP;VAL1;VAL2;VAL3|g
+        //   >NOME:PRIMEIRO_TS;STEP;VAL1;VAL2;VAL3§ºc|g
+        //
+        // Regras:
+        //   - Não é XY
+        //   - Não é texto ('t')
+        //   - Pelo menos 3 itens: [TS0, STEP, VAL1, VAL2, ...]
+        //   - Nenhum item contém ":" (senão já cai na lógica antiga ts:val)
+        //
+        // Interpretação:
+        //   TS0 e STEP estão em milissegundos (como no resto do protocolo)
+        //   Para i = 0...(n-3):
+        //     ts_i = TS0 + i*STEP
+        //     val_i = VAL_(i+1)
+        // ------------------------------------------------------
+        if (!isXY && !isTextFormatTelem && values.length >= 3) {
+            const noColonAll = values.every(v => v && !v.includes(':'));
+
+            if (noColonAll) {
+                let ts0Ms = parseFloat(values[0]);
+                let stepMs = parseFloat(values[1]);
+
+                if (isFinite(ts0Ms) && isFinite(stepMs)) {
+                    for (let i = 2; i < values.length; i++) {
+                        let valStr = values[i];
+                        if (!valStr) continue;
+
+                        let yVal = parseFloat(valStr);
+                        if (!isFinite(yVal)) continue;
+
+                        let tsMs = ts0Ms + (i - 2) * stepMs;
+                        let tsSec = tsMs / 1000.0;
+
+                        xArray.push(tsSec);   // eixo X (tempo em segundos)
+                        yArray.push(yVal);    // valor numérico
+                        zArray.push(now);     // compatibilidade (timestamp de recepção)
+                    }
+
+                    // se deu bom, já envia e sai da função
+                    if (xArray.length > 0) {
+                        appendData(
+                            name,
+                            xArray,
+                            yArray,
+                            zArray,
+                            unit,
+                            flags,
+                            "number",
+                            widgetLabel
+                        );
+                    }
+                    return;
+                }
+            }
+        }
+
+        // ------------------------------------------------------
+        // Fluxo padrão já existente: ts:val, texto, xy, etc.
+        // ------------------------------------------------------
         const isBatch = values.length > 1;
 
         for (let raw of values) {
@@ -198,7 +262,7 @@
                 } else if (dims.length === 3) {
                     xArray.push(parseFloat(dims[0]));
                     yArray.push(isTextFormatTelem ? dims[1] : parseFloat(dims[1]));
-                    zArray.push(parseFloat(dims[2]) / 1000); // ts em ms -> s
+                    zArray.push(parseFloat(dims[2]) / 1000); // ms → s
                 } else {
                     console.error("[telemetry xy] ponto inválido (use 'x:y' ou 'x:y:ts'):", raw);
                 }
@@ -214,7 +278,7 @@
                 }
                 xArray.push(now);
                 yArray.push(isTextFormatTelem ? dims[0] : parseFloat(dims[0]));
-                // zArray opcional para compat; mantemos vazio
+                // zArray opcional para compat
             } else if (dims.length === 2) {
                 // ts:val (ts em ms)
                 let tsMs = parseFloat(dims[0]);
@@ -230,7 +294,6 @@
             }
         }
 
-        // envia tudo de uma vez (um append por mensagem)
         if (xArray.length > 0) {
             appendData(
                 name,
