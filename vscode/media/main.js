@@ -136,8 +136,73 @@ function setAllUdpConnected(flag) {
   }
 }
 
-/* =================== Recepção do Host/Servidor =================== */
+function decodePlotRawFrame(buf) {
+  // buf: Uint8Array contendo o pacote "<nome:ts0;step;minmax+pontos|g\r\n"
 
+  const text = new TextDecoder().decode(buf);
+
+  // 1) Extrai nome, ts0 e step pelo cabeçalho ASCII
+  // Formato:
+  // <NOME:TS0;STEP;[binário...]
+
+  const m = text.match(/^<([^:]+):(\d+);(\d+);/);
+  if (!m) throw new Error("Cabeçalho inválido no plotRaw");
+
+  const varName = m[1];
+  const ts0 = Number(m[2]);
+  const step = Number(m[3]);
+
+  // Posição onde terminam os números ASCII e começam os floats
+  const headerEnd = m[0].length;
+
+  // 2) Lê mn e mx (float32 LE)
+  const dv = new DataView(buf.buffer, buf.byteOffset + headerEnd);
+  const mn = dv.getFloat32(0, true);
+  const mx = dv.getFloat32(4, true);
+
+  // 3) Posição onde começam os uint16
+  let ptr = headerEnd + 8;
+
+  // 4) Descobre onde termina antes do sufixo (|g\r\n)
+  const endSig = "|g\r\n";
+  const endIndex = text.indexOf(endSig);
+  if (endIndex === -1) throw new Error("Frame RAW sem sufixo |g");
+
+  // Quantidade de pontos = bytes até '§' ou até fim
+  let dataEnd = endIndex;
+
+  // 5) Unidade opcional (§UNIT)
+  let unit = "";
+  const unitIdx = text.indexOf("§", ptr);
+  if (unitIdx !== -1 && unitIdx < endIndex) {
+    unit = text.substring(unitIdx + 1, endIndex);
+    dataEnd = unitIdx; // valores acabam antes do '§'
+  }
+
+  const bytesValues = dataEnd - ptr;
+  const nSamples = bytesValues / 2;
+
+  const y = [];
+  for (let i = 0; i < nSamples; i++) {
+    const val = new DataView(buf.buffer, buf.byteOffset + ptr + i * 2).getUint16(0, true);
+    // converte para float com base em mn/mx
+    const f = mn + (val / 65535) * (mx - mn);
+    y.push(f);
+  }
+
+  // 6) Converte para o formato textual que parseData já entende
+  //
+  // >NOME:TS0;STEP;v0;v1;v2§UNIT|g
+  //
+  let out = ">" + varName + ":" + ts0 + ";" + step + ";" + y.join(";");
+
+  if (unit) out += "§" + unit;
+  out += "|g";
+
+  return out;
+}
+
+/* =================== Recepção do Host/Servidor =================== */
 window.addEventListener('message', (event) => {
   const msg = event.data || {};
 
@@ -180,6 +245,19 @@ window.addEventListener('message', (event) => {
     //   if (app.configure.cmdUdpPort === undefined) app.configure.cmdUdpPort = 0;
     // }
     setAllUdpConnected(false);
+    return;
+  }
+  // -------------------------------------------------------
+  // NOVO: frame binário RAW do plotRaw (< ... |g\r\n)
+  // -------------------------------------------------------
+  if (msg.isRaw && msg.data instanceof Uint8Array) {
+    try {
+      const textFrame = decodePlotRawFrame(msg.data); 
+      // repassa como string já normalizada → serverMessageReading.js
+      parseData({ data: textFrame, timestamp: msg.timestamp });
+    } catch (e) {
+      console.error("[plotRaw] erro ao decodificar:", e);
+    }
     return;
   }
 

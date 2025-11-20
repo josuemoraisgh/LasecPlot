@@ -248,12 +248,63 @@ function bindUdpServer(udpPort: number, localIP: string) {
   udpServer = dgram.createSocket('udp4');
   udpServer.bind(udpPort);
 
+  // ======== Parser manual UDP: RAW (<...|g\r\n) + texto ========
+  let udpBuffer = Buffer.alloc(0);
+  const rawEndUdp = Buffer.from('|g\r\n');
+
   udpServer.on('message', (msg: Buffer) => {
-    currentPanel?.webview.postMessage({
-      data: msg.toString(),
-      fromSerial: false,
-      timestamp: Date.now()
-    });
+    if (!Buffer.isBuffer(msg)) {
+      msg = Buffer.from(msg);
+    }
+
+    // concatena no buffer
+    udpBuffer = Buffer.concat([udpBuffer, msg]);
+
+    while (udpBuffer.length > 0) {
+
+      // --------------------------------------------------------
+      // 1) Procurar início do frame RAW "<"
+      let start = udpBuffer.indexOf(0x3C); // '<'
+      if (start !== -1) {
+
+          // Se houver lixo antes do '<', descarta
+          if (start > 0) {
+              udpBuffer = udpBuffer.slice(start);
+          }
+
+          const endIdx = udpBuffer.indexOf(rawEndUdp);
+          if (endIdx === -1) break; // aguarda mais dados
+
+          const frame = udpBuffer.slice(0, endIdx + rawEndUdp.length);
+          udpBuffer = udpBuffer.slice(endIdx + rawEndUdp.length);
+
+          currentPanel?.webview.postMessage({
+              data: new Uint8Array(frame),
+              isRaw: true,
+              fromSerial: false,
+              timestamp: Date.now(),
+          });
+
+          continue;
+      }
+      // --------------------------------------------------------
+      // 2) Caso NÃO seja RAW → texto normal (\n)
+      // --------------------------------------------------------
+      const nlIdx = udpBuffer.indexOf(0x0A);
+      if (nlIdx === -1) break;
+
+      const lineBuf = udpBuffer.slice(0, nlIdx);
+      udpBuffer = udpBuffer.slice(nlIdx + 1);
+
+      let line = lineBuf.toString();
+      if (line.endsWith('\r')) line = line.slice(0, -1);
+
+      currentPanel?.webview.postMessage({
+        data: line,
+        fromSerial: false,
+        timestamp: Date.now()
+      });
+    }
   });
 
   udpServer.on('error', (err) => console.error('[UDP] server error:', err));
@@ -515,14 +566,64 @@ function runCmd(msg: any) {
       currentPanel?.webview.postMessage({ id, cmd: 'serialPortDisconnect' });
     });
 
-    const parser = sp.pipe(new ReadlineParser({ delimiter: '\n' }));
-    parser.on('data', (data: Buffer | string) => {
-      currentPanel?.webview.postMessage({
-        id,
-        data: data.toString(),
-        fromSerial: true,
-        timestamp: Date.now()
-      });
+// ======== Parser manual: RAW (<...|g\r\n) + texto (\n) ========
+    let serialBuffer = Buffer.alloc(0);
+    const rawEnd = Buffer.from('|g\r\n');
+
+    sp.on('data', (chunk: Buffer) => {
+      if (!Buffer.isBuffer(chunk)) {
+        chunk = Buffer.from(chunk);
+      }
+
+      // Acumula tudo num buffer de stream
+      serialBuffer = Buffer.concat([serialBuffer, chunk]);
+
+      // Processa enquanto tiver coisa suficiente
+      while (serialBuffer.length > 0) {
+        // 1) Se começa com '<' → frame RAW do plotRaw
+        if (serialBuffer[0] === 0x3C) { // '<'
+          const endIdx = serialBuffer.indexOf(rawEnd);
+          if (endIdx === -1) {
+            // Ainda não chegou o frame completo |g\r\n
+            break;
+          }
+
+          const frame = serialBuffer.slice(0, endIdx + rawEnd.length);
+          serialBuffer = serialBuffer.slice(endIdx + rawEnd.length);
+
+          currentPanel?.webview.postMessage({
+            id,
+            data: frame,      // Buffer cru
+            isRaw: true,
+            fromSerial: true,
+            timestamp: Date.now()
+          });
+        }
+        // 2) Caso contrário → trata como linha de texto terminada em '\n'
+        else {
+          const nlIdx = serialBuffer.indexOf(0x0A); // '\n'
+          if (nlIdx === -1) {
+            // Não temos uma linha completa ainda
+            break;
+          }
+
+          const lineBuf = serialBuffer.slice(0, nlIdx); // sem o '\n'
+          serialBuffer = serialBuffer.slice(nlIdx + 1);
+
+          let line = lineBuf.toString();
+          // Remove '\r' final se existir (Windows-style \r\n)
+          if (line.endsWith('\r')) {
+            line = line.slice(0, -1);
+          }
+
+          currentPanel?.webview.postMessage({
+            id,
+            data: line,
+            fromSerial: true,
+            timestamp: Date.now()
+          });
+        }
+      }
     });
     return;
   }
